@@ -67,7 +67,7 @@ def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) 
         logger.info("Added console trace exporter (stdout)")
         exporters_added += 1
     
-    # OTLP exporter (for Jaeger, OTEL Collector, etc.)
+    # OTLP exporter (for Jaeger, OTEL Collector, Honeycomb, etc.)
     if (settings.otel_traces_exporter == "otlp" or 
         settings.otel_exporter_endpoint or 
         os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")):
@@ -78,10 +78,26 @@ def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) 
             "http://localhost:4317"
         )
         
+        # Get headers for authentication (e.g., Honeycomb API key)
+        headers_str = os.getenv("OTEL_EXPORTER_OTLP_HEADERS")
+        headers = {}
+        if headers_str:
+            # Parse headers like "key1=value1,key2=value2"
+            for header in headers_str.split(","):
+                if "=" in header:
+                    key, value = header.strip().split("=", 1)
+                    headers[key.strip()] = value.strip()
+        
         try:
-            otlp_exporter = OTLPSpanExporter(endpoint=endpoint)
+            # Use headers if provided (for Honeycomb, DataDog, etc.)
+            if headers:
+                otlp_exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
+                logger.info(f"Added OTLP trace exporter with auth: {endpoint}")
+            else:
+                otlp_exporter = OTLPSpanExporter(endpoint=endpoint)
+                logger.info(f"Added OTLP trace exporter: {endpoint}")
+            
             tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-            logger.info(f"Added OTLP trace exporter: {endpoint}")
             exporters_added += 1
         except Exception as e:
             logger.warning(f"Failed to setup OTLP trace exporter: {e}")
@@ -109,7 +125,7 @@ def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) 
 def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) -> None:
     """Configure metric exporters based on settings."""
     
-    # OTLP metrics exporter
+    # OTLP metrics exporter (for Honeycomb, etc.)
     if (settings.otel_exporter_endpoint or 
         os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")):
         
@@ -119,16 +135,31 @@ def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) 
             "http://localhost:4317"
         )
         
+        # Get headers for authentication
+        headers_str = os.getenv("OTEL_EXPORTER_OTLP_HEADERS")
+        headers = {}
+        if headers_str:
+            for header in headers_str.split(","):
+                if "=" in header:
+                    key, value = header.strip().split("=", 1)
+                    headers[key.strip()] = value.strip()
+        
         try:
             from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
             
-            otlp_metric_exporter = OTLPMetricExporter(endpoint=endpoint)
+            # Use headers if provided
+            if headers:
+                otlp_metric_exporter = OTLPMetricExporter(endpoint=endpoint, headers=headers)
+                logger.info(f"Added OTLP metric exporter with auth: {endpoint}")
+            else:
+                otlp_metric_exporter = OTLPMetricExporter(endpoint=endpoint)
+                logger.info(f"Added OTLP metric exporter: {endpoint}")
+            
             metric_reader = PeriodicExportingMetricReader(
                 exporter=otlp_metric_exporter,
                 export_interval_millis=30000,  # Export every 30 seconds
             )
             metric_provider._readers = [metric_reader]
-            logger.info(f"Added OTLP metric exporter: {endpoint}")
         except Exception as e:
             logger.warning(f"Failed to setup OTLP metric exporter: {e}")
 

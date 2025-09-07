@@ -49,6 +49,25 @@ uv run mariners-bot
 docker-compose up -d
 ```
 
+### Production Deployment with Honeycomb
+
+For production deployment with Honeycomb observability:
+
+```bash
+# Copy the Honeycomb environment template
+cp env.honeycomb.template .env
+
+# Edit .env with your actual values:
+# - TELEGRAM_BOT_TOKEN (from @BotFather)  
+# - TELEGRAM_CHAT_ID (use mariners-bot get-chat-id)
+# - OTEL_EXPORTER_OTLP_HEADERS (your Honeycomb API key)
+
+# Run with production observability
+docker-compose up -d
+
+# Monitor traces and metrics in Honeycomb UI
+```
+
 ## Configuration
 
 Set these environment variables:
