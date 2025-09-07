@@ -27,6 +27,8 @@ dependencies = [
     "uvloop>=0.19",
     "click>=8.1",
     "aiosqlite>=0.19",
+    "fastapi>=0.104",
+    "uvicorn>=0.24",
 ]
 
 [project.optional-dependencies]

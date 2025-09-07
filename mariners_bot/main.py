@@ -9,6 +9,7 @@ import click
 import structlog
 import uvloop
 
+from .api.server import HealthServer
 from .bot import TelegramBot
 from .clients import MLBClient
 from .config import get_settings
@@ -53,6 +54,7 @@ class MarinersBot:
         self.db_session = get_database_session(self.settings)
         self.scheduler = GameScheduler(self.settings)
         self.telegram_bot = TelegramBot(self.settings)
+        self.health_server = HealthServer()
         self.running = False
 
         # Setup scheduler callbacks
@@ -68,6 +70,9 @@ class MarinersBot:
 
             # Initialize database
             await self.db_session.create_tables()
+
+            # Start health check server first
+            await self.health_server.start()
 
             # Start scheduler
             await self.scheduler.start()
@@ -101,6 +106,9 @@ class MarinersBot:
 
             # Stop scheduler
             await self.scheduler.shutdown()
+
+            # Stop health server
+            await self.health_server.stop()
 
             # Close database connections
             await self.db_session.close()
@@ -282,8 +290,22 @@ def sync_schedule(days: int) -> None:
 
 
 @cli.command()
+@click.option("--port", type=int, help="Port to run health server on (overrides config)")
+def health(port: int | None) -> None:
+    """Run the health check server only."""
+    import os
+    from .api.server import run_health_server_standalone
+    
+    if port:
+        os.environ["HEALTH_CHECK_PORT"] = str(port)
+    
+    uvloop.install()
+    asyncio.run(run_health_server_standalone())
+
+
+@cli.command()
 def init_db() -> None:
-    """Initialize the database."""
+    """Initialize the database (creates tables directly, use migrate for production)."""
 
     async def init():
         settings = get_settings()
@@ -300,6 +322,71 @@ def init_db() -> None:
 
     uvloop.install()
     asyncio.run(init())
+
+
+@cli.command()
+@click.option("--message", "-m", help="Migration message")
+def migrate(message: str | None) -> None:
+    """Create a new database migration."""
+    import subprocess
+    
+    if not message:
+        message = click.prompt("Migration message")
+    
+    try:
+        result = subprocess.run([
+            "uv", "run", "alembic", "revision", "--autogenerate", "-m", message
+        ], capture_output=True, text=True, check=True)
+        click.echo(result.stdout)
+        if result.stderr:
+            click.echo(result.stderr, err=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Error creating migration: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--revision", help="Target revision (default: head)")
+def upgrade(revision: str | None) -> None:
+    """Apply database migrations."""
+    import subprocess
+    
+    revision = revision or "head"
+    
+    try:
+        result = subprocess.run([
+            "uv", "run", "alembic", "upgrade", revision
+        ], capture_output=True, text=True, check=True)
+        click.echo(result.stdout)
+        if result.stderr:
+            click.echo(result.stderr, err=True)
+        click.echo(f"Database upgraded to {revision}")
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Error upgrading database: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--revision", help="Target revision")
+def downgrade(revision: str) -> None:
+    """Downgrade database to a previous migration."""
+    import subprocess
+    
+    if not revision:
+        click.echo("Revision is required for downgrade", err=True)
+        sys.exit(1)
+    
+    try:
+        result = subprocess.run([
+            "uv", "run", "alembic", "downgrade", revision
+        ], capture_output=True, text=True, check=True)
+        click.echo(result.stdout)
+        if result.stderr:
+            click.echo(result.stderr, err=True)
+        click.echo(f"Database downgraded to {revision}")
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Error downgrading database: {e}", err=True)
+        sys.exit(1)
 
 
 def main() -> None:
