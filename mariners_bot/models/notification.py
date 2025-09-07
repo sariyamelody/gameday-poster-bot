@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class NotificationStatus(str, Enum):
@@ -59,8 +59,12 @@ class NotificationJob(BaseModel):
             f"status={self.status.value})"
         )
 
-    model_config = {
-        "json_encoders": {
-            datetime: lambda v: v.isoformat(),
-        }
-    }
+    @field_serializer('scheduled_time', 'created_at', 'sent_at')
+    def serialize_datetime(self, value: datetime | None) -> str | None:
+        """Serialize datetime fields to ISO format."""
+        return value.isoformat() if value else None
+    
+    @field_serializer('status')
+    def serialize_status(self, value: NotificationStatus) -> str:
+        """Serialize NotificationStatus enum to string value."""
+        return value.value

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class User(BaseModel):
@@ -37,8 +37,7 @@ class User(BaseModel):
         """String representation of the user."""
         return f"User({self.display_name}, chat_id={self.chat_id}, subscribed={self.subscribed})"
 
-    model_config = {
-        "json_encoders": {
-            datetime: lambda v: v.isoformat(),
-        }
-    }
+    @field_serializer('created_at', 'last_seen')
+    def serialize_datetime(self, value: datetime | None) -> str | None:
+        """Serialize datetime fields to ISO format."""
+        return value.isoformat() if value else None

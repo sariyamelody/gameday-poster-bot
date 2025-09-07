@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class GameStatus(str, Enum):
@@ -69,8 +69,12 @@ class Game(BaseModel):
             f"({self.date.strftime('%Y-%m-%d %H:%M UTC')})"
         )
 
-    model_config = {
-        "json_encoders": {
-            datetime: lambda v: v.isoformat(),
-        }
-    }
+    @field_serializer('date', 'created_at', 'updated_at')
+    def serialize_datetime(self, value: datetime | None) -> str | None:
+        """Serialize datetime fields to ISO format."""
+        return value.isoformat() if value else None
+    
+    @field_serializer('status')
+    def serialize_status(self, value: GameStatus) -> str:
+        """Serialize GameStatus enum to string value."""
+        return value.value
