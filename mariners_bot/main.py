@@ -14,6 +14,7 @@ from .clients import MLBClient
 from .config import get_settings
 from .database import Repository, get_database_session
 from .models import Game
+from .observability import setup_telemetry, get_tracer, create_app_metrics
 from .scheduler import GameScheduler
 
 # Setup structured logging
@@ -43,6 +44,12 @@ class MarinersBot:
     def __init__(self) -> None:
         """Initialize the bot application."""
         self.settings = get_settings()
+        
+        # Initialize OpenTelemetry observability
+        setup_telemetry(self.settings)
+        self.tracer = get_tracer("mariners-bot.main")
+        self.metrics = create_app_metrics()
+        
         self.db_session = get_database_session(self.settings)
         self.scheduler = GameScheduler(self.settings)
         self.telegram_bot = TelegramBot(self.settings)
@@ -211,12 +218,23 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-def start(debug: bool) -> None:
+@click.option("--traces-stdout", is_flag=True, help="Enable OpenTelemetry traces to stdout")
+@click.option("--trace-exporter", type=click.Choice(['none', 'console', 'otlp', 'jaeger']), 
+              default='none', help="OpenTelemetry trace exporter to use")
+def start(debug: bool, traces_stdout: bool, trace_exporter: str) -> None:
     """Start the Mariners notification bot."""
+    import os
+    
     # Configure logging level
     if debug:
         import logging
         logging.basicConfig(level=logging.DEBUG)
+    
+    # Override OTEL settings if CLI options provided
+    if traces_stdout:
+        os.environ["OTEL_TRACES_TO_STDOUT"] = "true"
+    if trace_exporter != 'none':
+        os.environ["OTEL_TRACES_EXPORTER"] = trace_exporter
 
     # Use uvloop for better async performance
     uvloop.install()

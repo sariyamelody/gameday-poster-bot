@@ -11,6 +11,9 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG=${DEBUG:-false}
       - ENVIRONMENT=${ENVIRONMENT:-production}
+      - OTEL_TRACES_TO_STDOUT=${OTEL_TRACES_TO_STDOUT:-false}
+      - OTEL_TRACES_EXPORTER=${OTEL_TRACES_EXPORTER:-none}
+      - OTEL_EXPORTER_ENDPOINT=${OTEL_EXPORTER_ENDPOINT:-http://jaeger:4317}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

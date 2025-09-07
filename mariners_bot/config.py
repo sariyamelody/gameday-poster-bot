@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO")
     otel_exporter_endpoint: str | None = Field(default=None)
     otel_service_name: str = Field(default="mariners-bot")
+    otel_traces_to_stdout: bool = Field(default=False)
+    otel_traces_exporter: str = Field(default="none")  # none, console, otlp, jaeger
 
     # Health Check Configuration
     health_check_port: int = Field(default=8000)
