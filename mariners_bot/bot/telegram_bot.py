@@ -148,6 +148,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("subscribe", self._handle_subscribe))
         self.application.add_handler(CommandHandler("unsubscribe", self._handle_unsubscribe))
         self.application.add_handler(CommandHandler("next_game", self._handle_next_game))
+        self.application.add_handler(CommandHandler("nextgame", self._handle_next_game))
 
         # Message handler for regular text
         self.application.add_handler(
@@ -181,7 +182,7 @@ class TelegramBot:
                 f"• /status - Check your subscription status\n"
                 f"• /subscribe - Subscribe to notifications\n"
                 f"• /unsubscribe - Unsubscribe from notifications\n"
-                f"• /next_game - Get info about the next game\n\n"
+                f"• /nextgame or /next_game - Get info about the next game\n\n"
                 f"Go Mariners! 🌊"
             )
 
@@ -204,7 +205,7 @@ class TelegramBot:
             "• /status - Check your subscription status\n"
             "• /subscribe - Subscribe to game notifications\n"
             "• /unsubscribe - Unsubscribe from notifications\n"
-            "• /next_game - Get info about the next upcoming game\n\n"
+            "• /nextgame or /next_game - Get info about the next upcoming game\n\n"
             "<b>Features:</b>\n"
             "• 🔔 Automatic notifications 5 minutes before games\n"
             "• 🔗 Direct links to MLB Gameday\n"
@@ -309,35 +310,82 @@ class TelegramBot:
 
     async def _handle_next_game(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /next_game command."""
-        try:
-            async with self.db_session.get_session() as session:
-                repository = Repository(session)
-                upcoming_games = await repository.get_upcoming_games(limit=1)
+        from ..observability import get_tracer
+        tracer = get_tracer("mariners-bot.telegram")
 
-            if not upcoming_games:
-                message = "🤔 No upcoming Mariners games found. Check back later!"
-            else:
-                game = upcoming_games[0]
+        with tracer.start_as_current_span("handle_next_game_command") as span:
+            span.set_attribute("command", "nextgame")
+            span.set_attribute("user.chat_id", str(update.effective_chat.id) if update.effective_chat else "unknown")
 
-                # Convert to Pacific time for display
-                import pytz
-                pt_timezone = pytz.timezone("America/Los_Angeles")
-                game_time_pt = game.date.astimezone(pt_timezone)
+            try:
+                async with self.db_session.get_session() as session:
+                    repository = Repository(session)
+                    upcoming_games = await repository.get_upcoming_games(limit=1)
 
-                message = (
-                    f"⚾ <b>Next Mariners Game</b>\n\n"
-                    f"🏟️ <b>{game.away_team} @ {game.home_team}</b>\n"
-                    f"📅 {game_time_pt.strftime('%A, %B %d, %Y')}\n"
-                    f"🕐 {game_time_pt.strftime('%I:%M %p %Z')}\n"
-                    f"📍 {game.venue}\n\n"
-                    f"<a href=\"{game.gameday_url}\">🔗 MLB Gameday</a>"
-                )
+                span.set_attribute("games_found", len(upcoming_games))
 
-            await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+                if not upcoming_games:
+                    message = (
+                        "🤔 <b>No upcoming games found</b>\n\n"
+                        "There are no scheduled Mariners games in the near future. "
+                        "This could mean we're in the off-season or between series.\n\n"
+                        "Check back later for the next game! 🌊"
+                    )
+                else:
+                    game = upcoming_games[0]
+                    span.set_attribute("game.id", game.game_id)
+                    span.set_attribute("game.opponent", game.opponent)
+                    span.set_attribute("game.is_home", game.is_mariners_home)
 
-        except Exception as e:
-            logger.error("Error getting next game", error=str(e))
-            await update.message.reply_text("Sorry, I couldn't get the next game info right now.")
+                    # Convert to Pacific time for display
+                    import pytz
+                    pt_timezone = pytz.timezone("America/Los_Angeles")
+                    game_time_pt = game.date.astimezone(pt_timezone)
+
+                    # Determine if Mariners are home or away
+                    if game.is_mariners_home:
+                        matchup = f"<b>{game.opponent} @ Seattle Mariners</b>"
+                        location_emoji = "🏠"
+                        location_note = "Home Game"
+                    else:
+                        matchup = f"<b>Seattle Mariners @ {game.opponent}</b>"
+                        location_emoji = "✈️"
+                        location_note = "Away Game"
+
+                    # Calculate days until game
+                    from datetime import UTC, datetime
+                    days_until = (game.date.date() - datetime.now(UTC).date()).days
+                    span.set_attribute("game.days_until", days_until)
+
+                    if days_until == 0:
+                        time_note = "🔥 <b>TODAY!</b>"
+                    elif days_until == 1:
+                        time_note = "📅 <b>Tomorrow</b>"
+                    elif days_until <= 7:
+                        time_note = f"📅 In {days_until} days"
+                    else:
+                        time_note = f"📅 In {days_until} days"
+
+                    message = (
+                        f"⚾ <b>Next Mariners Game</b>\n\n"
+                        f"🏟️ {matchup}\n"
+                        f"{location_emoji} {location_note}\n"
+                        f"{time_note}\n\n"
+                        f"📅 <b>Date:</b> {game_time_pt.strftime('%A, %B %d, %Y')}\n"
+                        f"🕐 <b>Time:</b> {game_time_pt.strftime('%I:%M %p %Z')}\n"
+                        f"📍 <b>Venue:</b> {game.venue}\n\n"
+                        f"<a href=\"{game.gameday_url}\">🔗 Watch on MLB Gameday</a>\n\n"
+                        f"I'll send a notification 5 minutes before first pitch! 🚨"
+                    )
+
+                await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+                span.set_attribute("response.sent", True)
+
+            except Exception as e:
+                span.set_attribute("error", str(e))
+                span.set_attribute("response.sent", False)
+                logger.error("Error getting next game", error=str(e))
+                await update.message.reply_text("Sorry, I couldn't get the next game info right now.")
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle regular messages."""
