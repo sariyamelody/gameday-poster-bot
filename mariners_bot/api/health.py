@@ -1,12 +1,11 @@
 """Health check API endpoints."""
 
-import asyncio
-from datetime import datetime, UTC
-from typing import Dict, Any
+from datetime import UTC, datetime
+from typing import Any
 
+import structlog
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, field_serializer
-import structlog
 
 from ..config import get_settings
 from ..database import get_database_session
@@ -20,8 +19,8 @@ class HealthResponse(BaseModel):
     timestamp: datetime
     version: str
     environment: str
-    checks: Dict[str, Any]
-    
+    checks: dict[str, Any]
+
     @field_serializer('timestamp')
     def serialize_timestamp(self, value: datetime) -> str:
         """Serialize datetime to ISO format."""
@@ -30,7 +29,7 @@ class HealthResponse(BaseModel):
 
 class HealthCheckApp:
     """FastAPI application for health checks."""
-    
+
     def __init__(self):
         """Initialize the health check app."""
         self.settings = get_settings()
@@ -41,36 +40,36 @@ class HealthCheckApp:
             docs_url="/docs" if self.settings.debug else None,
             redoc_url="/redoc" if self.settings.debug else None,
         )
-        
+
         # Add routes
         self.app.get("/health", response_model=HealthResponse)(self.health_check)
         self.app.get("/", response_model=HealthResponse)(self.health_check)
-    
+
     async def health_check(self) -> HealthResponse:
         """Comprehensive health check endpoint."""
         checks = {}
         overall_status = "healthy"
-        
+
         try:
             # Database connectivity check
             db_status = await self._check_database()
             checks["database"] = db_status
             if not db_status["healthy"]:
                 overall_status = "unhealthy"
-            
+
             # Memory and basic system checks
             checks["system"] = self._check_system()
-            
+
             # Configuration validation
             checks["configuration"] = self._check_configuration()
             if not checks["configuration"]["healthy"]:
                 overall_status = "degraded"
-                
+
         except Exception as e:
             logger.error("Health check failed", error=str(e))
             overall_status = "unhealthy"
             checks["error"] = str(e)
-        
+
         response = HealthResponse(
             status=overall_status,
             timestamp=datetime.now(UTC),
@@ -78,39 +77,39 @@ class HealthCheckApp:
             environment=self.settings.environment,
             checks=checks
         )
-        
+
         # Return appropriate HTTP status
         if overall_status == "unhealthy":
             raise HTTPException(status_code=503, detail=response.model_dump())
-        
+
         return response
-    
-    async def _check_database(self) -> Dict[str, Any]:
+
+    async def _check_database(self) -> dict[str, Any]:
         """Check database connectivity and basic operations."""
         try:
             db_session = get_database_session(self.settings)
-            
+
             # Test basic connectivity with a simple query
             start_time = datetime.now(UTC)
-            
+
             # Use raw SQL for a simple connectivity test
             async with db_session.get_session() as session:
                 from sqlalchemy import text
                 result = await session.execute(text("SELECT 1"))
                 result.fetchone()  # fetchone() is not awaitable
-            
+
             end_time = datetime.now(UTC)
             latency_ms = (end_time - start_time).total_seconds() * 1000
-            
+
             await db_session.close()
-            
+
             return {
                 "healthy": True,
                 "latency_ms": round(latency_ms, 2),
                 "database_url": self.settings.database_url.split("://")[0] + "://***",  # Hide credentials
                 "status": "connected"
             }
-            
+
         except Exception as e:
             logger.error("Database health check failed", error=str(e))
             return {
@@ -118,19 +117,20 @@ class HealthCheckApp:
                 "error": str(e),
                 "status": "disconnected"
             }
-    
-    def _check_system(self) -> Dict[str, Any]:
+
+    def _check_system(self) -> dict[str, Any]:
         """Check basic system health."""
         try:
-            import psutil
             import os
-            
+
+            import psutil
+
             # Get memory usage
             memory = psutil.virtual_memory()
-            
+
             # Get current process info
             process = psutil.Process(os.getpid())
-            
+
             return {
                 "healthy": True,
                 "memory": {
@@ -145,7 +145,7 @@ class HealthCheckApp:
                 },
                 "uptime_seconds": round((datetime.now(UTC) - datetime.fromtimestamp(process.create_time(), UTC)).total_seconds(), 2)
             }
-            
+
         except ImportError:
             # psutil not available, return basic info
             return {
@@ -158,25 +158,25 @@ class HealthCheckApp:
                 "healthy": False,
                 "error": str(e)
             }
-    
-    def _check_configuration(self) -> Dict[str, Any]:
+
+    def _check_configuration(self) -> dict[str, Any]:
         """Check configuration validity."""
         issues = []
-        
+
         # Check required configuration
         if not self.settings.telegram_bot_token:
             issues.append("telegram_bot_token not configured")
-        
+
         if not self.settings.telegram_chat_id:
             issues.append("telegram_chat_id not configured")
-        
+
         # Check if timezone is valid
         try:
             import pytz
             pytz.timezone(self.settings.scheduler_timezone)
         except Exception:
             issues.append(f"Invalid timezone: {self.settings.scheduler_timezone}")
-        
+
         return {
             "healthy": len(issues) == 0,
             "issues": issues,

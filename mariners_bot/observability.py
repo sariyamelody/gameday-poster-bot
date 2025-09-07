@@ -4,7 +4,6 @@ import logging
 import os
 
 from opentelemetry import metrics, trace
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
@@ -12,7 +11,11 @@ from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    ConsoleSpanExporter,
+    SimpleSpanProcessor,
+)
 
 from mariners_bot.config import Settings
 
@@ -21,31 +24,31 @@ logger = logging.getLogger(__name__)
 
 def setup_telemetry(settings: Settings) -> None:
     """Set up OpenTelemetry tracing and metrics based on configuration."""
-    
+
     # Create resource with service information
     resource = Resource.create({
         "service.name": settings.otel_service_name,
         "service.version": "0.1.0",
         "deployment.environment": settings.environment,
     })
-    
+
     # Set up tracing
     tracer_provider = TracerProvider(resource=resource)
     trace.set_tracer_provider(tracer_provider)
-    
+
     # Configure trace exporters based on settings
     _setup_trace_exporters(tracer_provider, settings)
-    
+
     # Set up metrics
     metric_provider = MeterProvider(resource=resource)
     metrics.set_meter_provider(metric_provider)
-    
+
     # Configure metric exporters
     _setup_metric_exporters(metric_provider, settings)
-    
+
     # Auto-instrument libraries
     _setup_auto_instrumentation()
-    
+
     logger.info(
         f"OpenTelemetry initialized - Service: {settings.otel_service_name}, "
         f"Environment: {settings.environment}, "
@@ -56,9 +59,9 @@ def setup_telemetry(settings: Settings) -> None:
 
 def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) -> None:
     """Configure trace exporters based on settings."""
-    
+
     exporters_added = 0
-    
+
     # Console/stdout exporter
     if settings.otel_traces_to_stdout or settings.otel_traces_exporter == "console":
         console_exporter = ConsoleSpanExporter()
@@ -66,75 +69,52 @@ def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) 
         tracer_provider.add_span_processor(SimpleSpanProcessor(console_exporter))
         logger.info("Added console trace exporter (stdout)")
         exporters_added += 1
-    
-    # OTLP exporter (for Jaeger, OTEL Collector, Honeycomb, etc.)
-    if (settings.otel_traces_exporter == "otlp" or 
-        settings.otel_exporter_endpoint or 
+
+    # OTLP exporter (for Honeycomb, DataDog, New Relic, etc.)
+    if (settings.otel_traces_exporter == "otlp" or
         os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")):
-        
-        endpoint = (
-            settings.otel_exporter_endpoint or 
-            os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or 
-            "http://localhost:4317"
-        )
-        
-        # Get headers for authentication (e.g., Honeycomb API key)
-        headers_str = os.getenv("OTEL_EXPORTER_OTLP_HEADERS")
-        headers = {}
-        if headers_str:
-            # Parse headers like "key1=value1,key2=value2"
-            for header in headers_str.split(","):
-                if "=" in header:
-                    key, value = header.strip().split("=", 1)
-                    headers[key.strip()] = value.strip()
-        
-        try:
-            # Use headers if provided (for Honeycomb, DataDog, etc.)
-            if headers:
-                otlp_exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
-                logger.info(f"Added OTLP trace exporter with auth: {endpoint}")
-            else:
-                otlp_exporter = OTLPSpanExporter(endpoint=endpoint)
-                logger.info(f"Added OTLP trace exporter: {endpoint}")
-            
-            tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-            exporters_added += 1
-        except Exception as e:
-            logger.warning(f"Failed to setup OTLP trace exporter: {e}")
-    
-    # Jaeger exporter (if specified)
-    if settings.otel_traces_exporter == "jaeger":
-        try:
-            from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-            jaeger_exporter = JaegerExporter(
-                agent_host_name=os.getenv("JAEGER_AGENT_HOST", "localhost"),
-                agent_port=int(os.getenv("JAEGER_AGENT_PORT", "6831")),
-            )
-            tracer_provider.add_span_processor(BatchSpanProcessor(jaeger_exporter))
-            logger.info("Added Jaeger trace exporter")
-            exporters_added += 1
-        except ImportError:
-            logger.warning("Jaeger exporter not available, install opentelemetry-exporter-jaeger")
-        except Exception as e:
-            logger.warning(f"Failed to setup Jaeger trace exporter: {e}")
-    
+
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        if not endpoint:
+            logger.info("OTLP traces requested but no OTEL_EXPORTER_OTLP_ENDPOINT configured")
+        else:
+            # Get headers for authentication (e.g., Honeycomb API key)
+            headers_str = os.getenv("OTEL_EXPORTER_OTLP_HEADERS")
+            headers = {}
+            if headers_str:
+                # Parse headers like "key1=value1,key2=value2"
+                for header in headers_str.split(","):
+                    if "=" in header:
+                        key, value = header.strip().split("=", 1)
+                        headers[key.strip()] = value.strip()
+
+            try:
+                # Use headers if provided (for Honeycomb, DataDog, etc.)
+                if headers:
+                    otlp_exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
+                    logger.info(f"Added OTLP trace exporter with auth: {endpoint}")
+                else:
+                    otlp_exporter = OTLPSpanExporter(endpoint=endpoint)
+                    logger.info(f"Added OTLP trace exporter: {endpoint}")
+
+                tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+                exporters_added += 1
+            except Exception as e:
+                logger.warning(f"Failed to setup OTLP trace exporter: {e}")
+
+
     if exporters_added == 0:
         logger.info("No trace exporters configured - tracing disabled")
 
 
 def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) -> None:
     """Configure metric exporters based on settings."""
-    
+
     # OTLP metrics exporter (for Honeycomb, etc.)
-    if (settings.otel_exporter_endpoint or 
-        os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")):
-        
-        endpoint = (
-            settings.otel_exporter_endpoint or 
-            os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or 
-            "http://localhost:4317"
-        )
-        
+    if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+
         # Get headers for authentication
         headers_str = os.getenv("OTEL_EXPORTER_OTLP_HEADERS")
         headers = {}
@@ -143,10 +123,10 @@ def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) 
                 if "=" in header:
                     key, value = header.strip().split("=", 1)
                     headers[key.strip()] = value.strip()
-        
+
         try:
             from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-            
+
             # Use headers if provided
             if headers:
                 otlp_metric_exporter = OTLPMetricExporter(endpoint=endpoint, headers=headers)
@@ -154,7 +134,7 @@ def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) 
             else:
                 otlp_metric_exporter = OTLPMetricExporter(endpoint=endpoint)
                 logger.info(f"Added OTLP metric exporter: {endpoint}")
-            
+
             metric_reader = PeriodicExportingMetricReader(
                 exporter=otlp_metric_exporter,
                 export_interval_millis=30000,  # Export every 30 seconds
@@ -166,14 +146,14 @@ def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) 
 
 def _setup_auto_instrumentation() -> None:
     """Set up automatic instrumentation for supported libraries."""
-    
+
     try:
         # Instrument aiohttp client for MLB API calls
         AioHttpClientInstrumentor().instrument()
         logger.info("Instrumented aiohttp client")
     except Exception as e:
         logger.warning(f"Failed to instrument aiohttp: {e}")
-    
+
     try:
         # Instrument SQLAlchemy for database operations
         SQLAlchemyInstrumentor().instrument()
@@ -196,7 +176,7 @@ def get_meter(name: str):
 def create_app_metrics():
     """Create application-specific metrics."""
     meter = get_meter("mariners-bot")
-    
+
     return {
         "notifications_sent": meter.create_counter(
             "notifications_sent_total",
@@ -204,7 +184,7 @@ def create_app_metrics():
             unit="1"
         ),
         "notification_latency": meter.create_histogram(
-            "notification_latency_seconds", 
+            "notification_latency_seconds",
             description="Notification latency in seconds",
             unit="s"
         ),

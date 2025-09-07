@@ -73,7 +73,7 @@ class Game(BaseModel):
     def serialize_datetime(self, value: datetime | None) -> str | None:
         """Serialize datetime fields to ISO format."""
         return value.isoformat() if value else None
-    
+
     @field_serializer('status')
     def serialize_status(self, value: GameStatus) -> str:
         """Serialize GameStatus enum to string value."""

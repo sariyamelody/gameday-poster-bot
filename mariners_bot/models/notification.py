@@ -63,7 +63,7 @@ class NotificationJob(BaseModel):
     def serialize_datetime(self, value: datetime | None) -> str | None:
         """Serialize datetime fields to ISO format."""
         return value.isoformat() if value else None
-    
+
     @field_serializer('status')
     def serialize_status(self, value: NotificationStatus) -> str:
         """Serialize NotificationStatus enum to string value."""

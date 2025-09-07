@@ -15,7 +15,7 @@ from .clients import MLBClient
 from .config import get_settings
 from .database import Repository, get_database_session
 from .models import Game
-from .observability import setup_telemetry, get_tracer, create_app_metrics
+from .observability import create_app_metrics, get_tracer, setup_telemetry
 from .scheduler import GameScheduler
 
 # Setup structured logging
@@ -45,12 +45,12 @@ class MarinersBot:
     def __init__(self) -> None:
         """Initialize the bot application."""
         self.settings = get_settings()
-        
+
         # Initialize OpenTelemetry observability
         setup_telemetry(self.settings)
         self.tracer = get_tracer("mariners-bot.main")
         self.metrics = create_app_metrics()
-        
+
         self.db_session = get_database_session(self.settings)
         self.scheduler = GameScheduler(self.settings)
         self.telegram_bot = TelegramBot(self.settings)
@@ -227,17 +227,17 @@ def cli() -> None:
 @cli.command()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 @click.option("--traces-stdout", is_flag=True, help="Enable OpenTelemetry traces to stdout")
-@click.option("--trace-exporter", type=click.Choice(['none', 'console', 'otlp', 'jaeger']), 
+@click.option("--trace-exporter", type=click.Choice(['none', 'console', 'otlp']),
               default='none', help="OpenTelemetry trace exporter to use")
 def start(debug: bool, traces_stdout: bool, trace_exporter: str) -> None:
     """Start the Mariners notification bot."""
     import os
-    
+
     # Configure logging level
     if debug:
         import logging
         logging.basicConfig(level=logging.DEBUG)
-    
+
     # Override OTEL settings if CLI options provided
     if traces_stdout:
         os.environ["OTEL_TRACES_TO_STDOUT"] = "true"
@@ -294,11 +294,12 @@ def sync_schedule(days: int) -> None:
 def health(port: int | None) -> None:
     """Run the health check server only."""
     import os
+
     from .api.server import run_health_server_standalone
-    
+
     if port:
         os.environ["HEALTH_CHECK_PORT"] = str(port)
-    
+
     uvloop.install()
     asyncio.run(run_health_server_standalone())
 
@@ -329,10 +330,10 @@ def init_db() -> None:
 def migrate(message: str | None) -> None:
     """Create a new database migration."""
     import subprocess
-    
+
     if not message:
         message = click.prompt("Migration message")
-    
+
     try:
         result = subprocess.run([
             "uv", "run", "alembic", "revision", "--autogenerate", "-m", message
@@ -350,9 +351,9 @@ def migrate(message: str | None) -> None:
 def upgrade(revision: str | None) -> None:
     """Apply database migrations."""
     import subprocess
-    
+
     revision = revision or "head"
-    
+
     try:
         result = subprocess.run([
             "uv", "run", "alembic", "upgrade", revision
@@ -371,11 +372,11 @@ def upgrade(revision: str | None) -> None:
 def downgrade(revision: str) -> None:
     """Downgrade database to a previous migration."""
     import subprocess
-    
+
     if not revision:
         click.echo("Revision is required for downgrade", err=True)
         sys.exit(1)
-    
+
     try:
         result = subprocess.run([
             "uv", "run", "alembic", "downgrade", revision

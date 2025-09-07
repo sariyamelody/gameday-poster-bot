@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mariners-bot:
     build: .
@@ -11,9 +9,18 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG=${DEBUG:-false}
       - ENVIRONMENT=${ENVIRONMENT:-production}
+      # OpenTelemetry Configuration
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-mariners-bot}
       - OTEL_TRACES_TO_STDOUT=${OTEL_TRACES_TO_STDOUT:-false}
       - OTEL_TRACES_EXPORTER=${OTEL_TRACES_EXPORTER:-none}
-      - OTEL_EXPORTER_ENDPOINT=${OTEL_EXPORTER_ENDPOINT:-http://jaeger:4317}
+      # Standard OpenTelemetry variables (Honeycomb, etc.)
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS}
+      - OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      # Additional scheduler configuration
+      - SCHEDULER_TIMEZONE=${SCHEDULER_TIMEZONE:-America/Los_Angeles}
+      - NOTIFICATION_ADVANCE_MINUTES=${NOTIFICATION_ADVANCE_MINUTES:-5}
+      - SCHEDULE_SYNC_HOUR=${SCHEDULE_SYNC_HOUR:-6}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -25,19 +32,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-  # Optional: Jaeger for tracing (development)
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    ports:
-      - "16686:16686"  # Jaeger UI
-      - "14268:14268"  # Jaeger collector HTTP
-      - "14269:14269"  # Jaeger health check
-      - "4317:4317"    # OTLP gRPC receiver
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-    profiles:
-      - monitoring
 
 networks:
   default:
