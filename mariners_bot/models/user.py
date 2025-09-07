@@ -1,6 +1,6 @@
 """User data model."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
@@ -14,7 +14,7 @@ class User(BaseModel):
     last_name: str | None = Field(default=None, description="User's last name")
     subscribed: bool = Field(default=True, description="Whether user is subscribed")
     timezone: str = Field(default="America/Los_Angeles", description="User's timezone")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="When user joined")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="When user joined")
     last_seen: datetime | None = Field(default=None, description="Last interaction time")
 
     @property
@@ -31,15 +31,14 @@ class User(BaseModel):
 
     def update_last_seen(self) -> None:
         """Update the last seen timestamp."""
-        self.last_seen = datetime.utcnow()
+        self.last_seen = datetime.now(UTC)
 
     def __str__(self) -> str:
         """String representation of the user."""
         return f"User({self.display_name}, chat_id={self.chat_id}, subscribed={self.subscribed})"
 
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {
+    model_config = {
+        "json_encoders": {
             datetime: lambda v: v.isoformat(),
         }
+    }

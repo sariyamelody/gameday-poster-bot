@@ -1,6 +1,6 @@
 """Game data model."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -26,7 +26,7 @@ class Game(BaseModel):
     venue: str = Field(..., description="Stadium name")
     status: GameStatus = Field(default=GameStatus.SCHEDULED, description="Game status")
     notification_sent: bool = Field(default=False, description="Whether notification was sent")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Record creation time")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="Record creation time")
     updated_at: datetime | None = Field(default=None, description="Last update time")
 
     @property
@@ -69,9 +69,8 @@ class Game(BaseModel):
             f"({self.date.strftime('%Y-%m-%d %H:%M UTC')})"
         )
 
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {
+    model_config = {
+        "json_encoders": {
             datetime: lambda v: v.isoformat(),
         }
+    }

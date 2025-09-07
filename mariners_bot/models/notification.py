@@ -1,6 +1,6 @@
 """Notification job data model."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -26,7 +26,7 @@ class NotificationJob(BaseModel):
     chat_id: str | None = Field(default=None, description="Telegram chat ID")
     attempts: int = Field(default=0, description="Number of send attempts")
     error_message: str | None = Field(default=None, description="Last error message")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Job creation time")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="Job creation time")
     sent_at: datetime | None = Field(default=None, description="When notification was sent")
 
     @property
@@ -39,7 +39,7 @@ class NotificationJob(BaseModel):
     def mark_sent(self) -> None:
         """Mark the notification as successfully sent."""
         self.status = NotificationStatus.SENT
-        self.sent_at = datetime.utcnow()
+        self.sent_at = datetime.now(UTC)
 
     def mark_failed(self, error: str) -> None:
         """Mark the notification as failed."""
@@ -59,9 +59,8 @@ class NotificationJob(BaseModel):
             f"status={self.status.value})"
         )
 
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {
+    model_config = {
+        "json_encoders": {
             datetime: lambda v: v.isoformat(),
         }
+    }

@@ -2,10 +2,13 @@
 
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.sql import func
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Base class for all database models."""
+    pass
 
 
 class GameRecord(Base):

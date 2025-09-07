@@ -50,12 +50,14 @@ build-backend = "hatchling.build"
 [tool.uv]
 dev-dependencies = [
     "pytest>=7.0",
-    "pytest-cov>=4.0", 
+    "pytest-cov>=4.0",
     "pytest-asyncio>=0.21",
     "ruff>=0.1",
     "mypy>=1.7",
     "bandit>=1.7",
     "pre-commit>=3.0",
+    "types-pytz>=2025.2.0.20250809",
+    "types-requests>=2.32.4.20250809",
 ]
 
 [tool.ruff]
