@@ -43,7 +43,19 @@ This document contains context, insights, and recommendations from Claude (Anthr
 **Alternative Considered**: Custom cron-based solution
 **Why Rejected**: Would require reimplementing timezone handling, persistence, and error recovery
 
-### 4. Container Registry: GitHub Container Registry (ghcr.io)
+### 4. Package Manager: uv
+
+**Rationale**:
+- **Extremely fast**: 10-100x faster than pip/poetry for dependency resolution
+- **Single binary**: No separate virtual environment management needed
+- **Modern standards**: Full PEP 621 support with pyproject.toml
+- **Lock file support**: Reproducible builds with uv.lock
+- **Drop-in replacement**: Works with existing Python tooling
+
+**Alternative Considered**: Poetry
+**Why Rejected**: Slower dependency resolution, more complex virtual environment handling
+
+### 5. Container Registry: GitHub Container Registry (ghcr.io)
 
 **Rationale**:
 - Free for public repositories
@@ -111,7 +123,7 @@ Multi-layered approach:
 3. **Build stage**: Multi-architecture Docker builds with caching
 4. **Deploy stage**: Automated deployment triggers
 
-**Key insight**: Parallel job execution in early stages for faster feedback, sequential in later stages for safety.
+**Key insight**: Parallel job execution in early stages for faster feedback, sequential in later stages for safety. Using uv significantly reduces CI build times due to faster dependency resolution.
 
 ### Monitoring Strategy
 **OpenTelemetry-based observability**:
@@ -204,9 +216,10 @@ If growth exceeds single-server capacity:
 2. **Iterate quickly**: Deploy early, get feedback, improve
 3. **Monitor from day one**: Don't retrofit observability
 4. **Document as you go**: Future you will thank present you
+5. **Leverage uv speed**: Fast dependency resolution enables rapid iteration cycles
 
 ### Team Considerations (if expanding)
-- **Skills needed**: Python, Docker, basic DevOps, sports domain knowledge
+- **Skills needed**: Python, uv package manager, Docker, basic DevOps, sports domain knowledge
 - **Onboarding**: Start with PLAN.md, then dive into code
 - **Code review focus**: Error handling, timezone logic, security practices
 

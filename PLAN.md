@@ -381,34 +381,33 @@ jobs:
         with:
           python-version: '3.11'
           
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
         
       - name: Install dependencies
-        run: poetry install
+        run: uv sync
         
       - name: Run linting
         run: |
-          poetry run ruff check .
-          poetry run mypy .
+          uv run ruff check .
+          uv run mypy .
           
       - name: Run tests
-        run: poetry run pytest --cov=. --cov-report=html
+        run: uv run pytest --cov=. --cov-report=html
 
   security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        
+      - name: Install dependencies
+        run: uv sync
+        
       - name: Run Bandit security scan
-        run: |
-          pip install bandit[toml]
-          bandit -r . -f json -o bandit-report.json
-          
-      - name: Run Safety check
-        run: |
-          pip install safety
-          safety check --json --output safety-report.json
+        run: uv run bandit -r . -f json -o bandit-report.json
 
   build-and-push:
     needs: [test, security]
@@ -490,19 +489,14 @@ FROM python:3.11-slim as builder
 
 WORKDIR /app
 
-# Install Poetry
-RUN pip install poetry==1.7.1
-
-# Configure Poetry
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VENV_IN_PROJECT=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy dependency files
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml uv.lock ./
 
 # Install dependencies
-RUN poetry install --only=main --no-root && rm -rf $POETRY_CACHE_DIR
+RUN uv sync --frozen --no-dev
 
 # Production stage
 FROM python:3.11-slim as production
@@ -566,22 +560,52 @@ ghcr.io/yourusername/gameday-poster-bot:main
 
 **Core Dependencies:**
 ```toml
-[tool.poetry.dependencies]
-python = "^3.11"
-python-telegram-bot = "^20.7"
-aiohttp = "^3.9"
-apscheduler = "^3.10"
-sqlalchemy = "^2.0"
-alembic = "^1.12"
-pydantic = "^2.5"
-pytz = "^2023.3"
-tenacity = "^8.2"
-opentelemetry-api = "^1.21"
-opentelemetry-sdk = "^1.21"
-opentelemetry-exporter-otlp = "^1.21"
-opentelemetry-instrumentation-aiohttp-client = "^0.42"
-opentelemetry-instrumentation-sqlalchemy = "^0.42"
-structlog = "^23.2"
+# pyproject.toml
+[project]
+name = "mariners-bot"
+version = "0.1.0"
+description = "Seattle Mariners Gameday Telegram Bot"
+requires-python = ">=3.11"
+dependencies = [
+    "python-telegram-bot>=20.7",
+    "aiohttp>=3.9",
+    "apscheduler>=3.10",
+    "sqlalchemy>=2.0",
+    "alembic>=1.12",
+    "pydantic>=2.5",
+    "pytz>=2023.3",
+    "tenacity>=8.2",
+    "opentelemetry-api>=1.36",
+    "opentelemetry-sdk>=1.36",
+    "opentelemetry-exporter-otlp>=1.36",
+    "opentelemetry-instrumentation-aiohttp-client>=0.57b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.57b0",
+    "structlog>=23.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-asyncio>=0.21",
+    "ruff>=0.1",
+    "mypy>=1.7",
+    "bandit>=1.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0", 
+    "pytest-asyncio>=0.21",
+    "ruff>=0.1",
+    "mypy>=1.7",
+    "bandit>=1.7",
+]
 ```
 
 ## Implementation Phases
