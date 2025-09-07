@@ -14,7 +14,7 @@ from mariners_bot.models import (
 class TestGame:
     """Test Game model."""
 
-    def test_game_creation(self):
+    def test_game_creation(self) -> None:
         """Test creating a game instance."""
         game = Game(
             game_id="12345",
@@ -32,7 +32,7 @@ class TestGame:
         assert game.status == GameStatus.SCHEDULED
         assert not game.notification_sent
 
-    def test_gameday_url_property(self):
+    def test_gameday_url_property(self) -> None:
         """Test gameday URL generation."""
         game = Game(
             game_id="776428",
@@ -44,7 +44,7 @@ class TestGame:
 
         assert game.gameday_url == "https://www.mlb.com/gameday/776428"
 
-    def test_mariners_home_detection(self):
+    def test_mariners_home_detection(self) -> None:
         """Test detection of Mariners home games."""
         home_game = Game(
             game_id="12345",
@@ -59,7 +59,7 @@ class TestGame:
         assert home_game.is_mariners_game
         assert home_game.opponent == "Boston Red Sox"
 
-    def test_mariners_away_detection(self):
+    def test_mariners_away_detection(self) -> None:
         """Test detection of Mariners away games."""
         away_game = Game(
             game_id="12345",
@@ -74,7 +74,7 @@ class TestGame:
         assert away_game.is_mariners_game
         assert away_game.opponent == "Atlanta Braves"
 
-    def test_non_mariners_game(self):
+    def test_non_mariners_game(self) -> None:
         """Test detection of non-Mariners games."""
         other_game = Game(
             game_id="12345",
@@ -92,7 +92,7 @@ class TestGame:
 class TestNotificationJob:
     """Test NotificationJob model."""
 
-    def test_notification_job_creation(self):
+    def test_notification_job_creation(self) -> None:
         """Test creating a notification job."""
         job = NotificationJob(
             game_id="12345",
@@ -107,7 +107,7 @@ class TestNotificationJob:
         assert job.attempts == 0
         assert job.sent_at is None
 
-    def test_job_id_generation(self):
+    def test_job_id_generation(self) -> None:
         """Test job ID generation."""
         job = NotificationJob(
             game_id="12345",
@@ -127,7 +127,7 @@ class TestNotificationJob:
 
         assert job_with_id.job_id == "custom_id"
 
-    def test_mark_sent(self):
+    def test_mark_sent(self) -> None:
         """Test marking notification as sent."""
         job = NotificationJob(
             game_id="12345",
@@ -140,7 +140,7 @@ class TestNotificationJob:
         assert job.status == NotificationStatus.SENT
         assert job.sent_at is not None
 
-    def test_mark_failed(self):
+    def test_mark_failed(self) -> None:
         """Test marking notification as failed."""
         job = NotificationJob(
             game_id="12345",
@@ -158,7 +158,7 @@ class TestNotificationJob:
 class TestUser:
     """Test User model."""
 
-    def test_user_creation(self):
+    def test_user_creation(self) -> None:
         """Test creating a user."""
         user = User(
             chat_id=123456789,
@@ -174,7 +174,7 @@ class TestUser:
         assert user.subscribed is True  # Default
         assert user.timezone == "America/Los_Angeles"  # Default
 
-    def test_display_name(self):
+    def test_display_name(self) -> None:
         """Test display name generation."""
         # Full name
         user1 = User(chat_id=1, first_name="John", last_name="Doe")
@@ -192,7 +192,7 @@ class TestUser:
         user4 = User(chat_id=4)
         assert user4.display_name == "User 4"
 
-    def test_update_last_seen(self):
+    def test_update_last_seen(self) -> None:
         """Test updating last seen timestamp."""
         user = User(chat_id=123)
         assert user.last_seen is None

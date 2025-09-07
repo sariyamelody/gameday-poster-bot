@@ -139,7 +139,8 @@ def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) 
                 exporter=otlp_metric_exporter,
                 export_interval_millis=30000,  # Export every 30 seconds
             )
-            metric_provider._readers = [metric_reader]
+            # Note: Direct assignment to _readers is internal API, but needed for SDK setup
+            metric_provider._readers = [metric_reader]  # type: ignore[attr-defined]
         except Exception as e:
             logger.warning(f"Failed to setup OTLP metric exporter: {e}")
 
@@ -162,18 +163,18 @@ def _setup_auto_instrumentation() -> None:
         logger.warning(f"Failed to instrument SQLAlchemy: {e}")
 
 
-def get_tracer(name: str):
+def get_tracer(name: str) -> trace.Tracer:
     """Get a tracer for the specified component."""
     return trace.get_tracer(name)
 
 
-def get_meter(name: str):
+def get_meter(name: str) -> metrics.Meter:
     """Get a meter for the specified component."""
     return metrics.get_meter(name)
 
 
 # Application-specific metrics
-def create_app_metrics():
+def create_app_metrics() -> dict[str, metrics.Instrument]:
     """Create application-specific metrics."""
     meter = get_meter("mariners-bot")
 

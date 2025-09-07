@@ -30,7 +30,7 @@ class HealthResponse(BaseModel):
 class HealthCheckApp:
     """FastAPI application for health checks."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the health check app."""
         self.settings = get_settings()
         self.app = FastAPI(
@@ -68,7 +68,7 @@ class HealthCheckApp:
         except Exception as e:
             logger.error("Health check failed", error=str(e))
             overall_status = "unhealthy"
-            checks["error"] = str(e)
+            checks = {"error": {"message": str(e)}}
 
         response = HealthResponse(
             status=overall_status,

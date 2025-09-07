@@ -51,10 +51,11 @@ class TelegramBot:
             logger.info("Telegram bot started with polling")
 
             # Start polling
-            await self.application.updater.start_polling(
-                drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES
-            )
+            if self.application.updater:
+                await self.application.updater.start_polling(
+                    drop_pending_updates=True,
+                    allowed_updates=Update.ALL_TYPES
+                )
 
         except Exception as e:
             logger.error("Failed to start bot polling", error=str(e))
@@ -63,7 +64,8 @@ class TelegramBot:
     async def stop_polling(self) -> None:
         """Stop the bot polling."""
         try:
-            await self.application.updater.stop()
+            if self.application.updater:
+                await self.application.updater.stop()
             await self.application.stop()
             await self.application.shutdown()
 
@@ -186,13 +188,15 @@ class TelegramBot:
                 f"Go Mariners! 🌊"
             )
 
-            await update.message.reply_text(welcome_message, parse_mode=ParseMode.HTML)
+            if update.message:
+                await update.message.reply_text(welcome_message, parse_mode=ParseMode.HTML)
 
             logger.info("User started bot", chat_id=update.effective_chat.id, username=user.username)
 
         except Exception as e:
             logger.error("Error handling start command", error=str(e))
-            await update.message.reply_text("Sorry, there was an error processing your request.")
+            if update.message:
+                await update.message.reply_text("Sorry, there was an error processing your request.")
 
     async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command."""
@@ -214,7 +218,8 @@ class TelegramBot:
             "Go Mariners! 🌊"
         )
 
-        await update.message.reply_text(help_message, parse_mode=ParseMode.HTML)
+        if update.message:
+            await update.message.reply_text(help_message, parse_mode=ParseMode.HTML)
 
     async def _handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /status command."""
@@ -240,11 +245,13 @@ class TelegramBot:
             else:
                 status_message = "❓ You haven't started the bot yet. Use /start to begin!"
 
-            await update.message.reply_text(status_message, parse_mode=ParseMode.HTML)
+            if update.message:
+                await update.message.reply_text(status_message, parse_mode=ParseMode.HTML)
 
         except Exception as e:
             logger.error("Error checking user status", error=str(e))
-            await update.message.reply_text("Sorry, I couldn't check your status right now.")
+            if update.message:
+                await update.message.reply_text("Sorry, I couldn't check your status right now.")
 
     async def _handle_subscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /subscribe command."""
@@ -269,13 +276,15 @@ class TelegramBot:
                 "Use /unsubscribe if you want to stop receiving notifications."
             )
 
-            await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+            if update.message:
+                await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
             logger.info("User subscribed", chat_id=update.effective_chat.id)
 
         except Exception as e:
             logger.error("Error subscribing user", error=str(e))
-            await update.message.reply_text("Sorry, there was an error with your subscription.")
+            if update.message:
+                await update.message.reply_text("Sorry, there was an error with your subscription.")
 
     async def _handle_unsubscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /unsubscribe command."""
@@ -300,13 +309,15 @@ class TelegramBot:
                 "Thanks for using the Mariners bot! 🌊"
             )
 
-            await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+            if update.message:
+                await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
             logger.info("User unsubscribed", chat_id=update.effective_chat.id)
 
         except Exception as e:
             logger.error("Error unsubscribing user", error=str(e))
-            await update.message.reply_text("Sorry, there was an error with your request.")
+            if update.message:
+                await update.message.reply_text("Sorry, there was an error with your request.")
 
     async def _handle_next_game(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /next_game command."""
@@ -378,14 +389,16 @@ class TelegramBot:
                         f"I'll send a notification 5 minutes before first pitch! 🚨"
                     )
 
-                await update.message.reply_text(message, parse_mode=ParseMode.HTML)
-                span.set_attribute("response.sent", True)
+                if update.message:
+                    await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+                    span.set_attribute("response.sent", True)
 
             except Exception as e:
                 span.set_attribute("error", str(e))
                 span.set_attribute("response.sent", False)
                 logger.error("Error getting next game", error=str(e))
-                await update.message.reply_text("Sorry, I couldn't get the next game info right now.")
+                if update.message:
+                    await update.message.reply_text("Sorry, I couldn't get the next game info right now.")
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle regular messages."""
@@ -412,7 +425,8 @@ class TelegramBot:
             "Use /help to see what I can do, or /next_game to check the upcoming schedule!"
         )
 
-        await update.message.reply_text(response)
+        if update.message:
+            await update.message.reply_text(response)
 
     async def _send_message_with_retry(
         self,
@@ -433,7 +447,11 @@ class TelegramBot:
 
             except RetryAfter as e:
                 # Telegram rate limiting
-                wait_time = e.retry_after + 1  # Add 1 second buffer
+                # Handle both int and timedelta types for retry_after
+                if isinstance(e.retry_after, int):
+                    wait_time = e.retry_after + 1
+                else:
+                    wait_time = int(e.retry_after.total_seconds()) + 1  # Add 1 second buffer
                 logger.warning(
                     "Rate limited by Telegram",
                     chat_id=chat_id,

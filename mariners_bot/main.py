@@ -195,7 +195,7 @@ async def main_async() -> None:
     global bot_instance
 
     # Set up signal handlers for graceful shutdown
-    def signal_handler(signum, frame):
+    def signal_handler(signum: int, frame: object) -> None:
         logger.info("Received shutdown signal", signal=signum)
         if bot_instance:
             asyncio.create_task(bot_instance.stop())
@@ -264,7 +264,7 @@ def start(debug: bool, traces_stdout: bool, trace_exporter: str) -> None:
 def sync_schedule(days: int) -> None:
     """Manually sync the game schedule."""
 
-    async def sync():
+    async def sync() -> None:
         settings = get_settings()
 
         try:
@@ -308,7 +308,7 @@ def health(port: int | None) -> None:
 def init_db() -> None:
     """Initialize the database (creates tables directly, use migrate for production)."""
 
-    async def init():
+    async def init() -> None:
         settings = get_settings()
         db_session = get_database_session(settings)
 

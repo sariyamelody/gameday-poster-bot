@@ -4,10 +4,12 @@ import asyncio
 import signal
 import sys
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 import uvicorn
 from fastapi import FastAPI
+from uvicorn import Server
 
 from ..config import get_settings
 from .health import create_health_app
@@ -18,12 +20,12 @@ logger = structlog.get_logger(__name__)
 class HealthServer:
     """Manages the health check HTTP server."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the health server."""
         self.settings = get_settings()
         self.app = create_health_app()
-        self.server = None
-        self.server_task = None
+        self.server: Server | None = None
+        self.server_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         """Start the health check server."""
@@ -68,7 +70,7 @@ class HealthServer:
 
 # Standalone health server for development/testing
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> Any:
     """FastAPI lifespan context manager."""
     logger.info("Health check API starting up")
     yield
@@ -90,7 +92,7 @@ async def run_health_server_standalone() -> None:
     settings = get_settings()
 
     # Setup signal handlers
-    def signal_handler(signum, frame):
+    def signal_handler(signum: int, frame: object) -> None:
         logger.info("Received shutdown signal", signal=signum)
         sys.exit(0)
 

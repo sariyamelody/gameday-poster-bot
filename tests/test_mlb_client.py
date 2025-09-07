@@ -13,7 +13,7 @@ from mariners_bot.models import GameStatus
 class TestMLBClient:
     """Test MLB API client."""
 
-    def test_client_initialization(self):
+    def test_client_initialization(self) -> None:
         """Test client initialization."""
         settings = Settings(telegram_bot_token="test")
         client = MLBClient(settings)
@@ -23,7 +23,7 @@ class TestMLBClient:
         assert client.team_id == 136
         assert client.session is None
 
-    def test_parse_game_status(self):
+    def test_parse_game_status(self) -> None:
         """Test game status parsing."""
         settings = Settings(telegram_bot_token="test")
         client = MLBClient(settings)
@@ -36,7 +36,7 @@ class TestMLBClient:
         assert client._parse_game_status("C") == GameStatus.CANCELLED
         assert client._parse_game_status("UNKNOWN") == GameStatus.SCHEDULED  # Default
 
-    def test_parse_game_data(self):
+    def test_parse_game_data(self) -> None:
         """Test parsing individual game data."""
         settings = Settings(telegram_bot_token="test")
         client = MLBClient(settings)
@@ -63,7 +63,7 @@ class TestMLBClient:
         assert game.status == GameStatus.SCHEDULED
         assert game.is_mariners_game
 
-    def test_parse_game_data_invalid(self):
+    def test_parse_game_data_invalid(self) -> None:
         """Test parsing invalid game data."""
         settings = Settings(telegram_bot_token="test")
         client = MLBClient(settings)
@@ -74,7 +74,7 @@ class TestMLBClient:
         game = client._parse_game_data(invalid_data)
         assert game is None
 
-    def test_parse_schedule_response(self):
+    def test_parse_schedule_response(self) -> None:
         """Test parsing full schedule response."""
         settings = Settings(telegram_bot_token="test")
         client = MLBClient(settings)
@@ -117,7 +117,7 @@ class TestMLBClient:
         assert games[0].is_mariners_game
 
     @pytest.mark.asyncio
-    async def test_async_context_manager(self):
+    async def test_async_context_manager(self) -> None:
         """Test async context manager functionality."""
         settings = Settings(telegram_bot_token="test")
 

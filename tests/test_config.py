@@ -9,7 +9,7 @@ from mariners_bot.config import Settings, get_settings
 class TestSettings:
     """Test Settings configuration."""
 
-    def test_default_settings(self):
+    def test_default_settings(self) -> None:
         """Test default configuration values."""
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test_token"}, clear=True):
             settings = Settings()
@@ -28,7 +28,7 @@ class TestSettings:
             assert settings.debug is False
             assert settings.environment == "production"
 
-    def test_environment_override(self):
+    def test_environment_override(self) -> None:
         """Test environment variable overrides."""
         env_vars = {
             "TELEGRAM_BOT_TOKEN": "custom_token",
@@ -51,7 +51,7 @@ class TestSettings:
             assert settings.debug is True
             assert settings.environment == "development"
 
-    def test_get_settings_singleton(self):
+    def test_get_settings_singleton(self) -> None:
         """Test that get_settings returns the same instance."""
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test"}, clear=True):
             settings1 = get_settings()

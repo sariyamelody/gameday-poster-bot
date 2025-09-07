@@ -1,6 +1,7 @@
 """MLB Stats API client."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 import aiohttp
 import structlog
@@ -30,7 +31,7 @@ class MLBClient:
         )
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         """Async context manager exit."""
         if self.session:
             await self.session.close()
@@ -39,7 +40,7 @@ class MLBClient:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10)
     )
-    async def _make_request(self, endpoint: str, params: dict | None = None) -> dict:
+    async def _make_request(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Make a request to the MLB API with retry logic."""
         if not self.session:
             raise RuntimeError("Client not initialized. Use async context manager.")
@@ -70,7 +71,7 @@ class MLBClient:
         season: int | None = None
     ) -> list[Game]:
         """Get the Mariners schedule for a date range."""
-        params = {
+        params: dict[str, Any] = {
             "teamId": self.team_id,
             "sportId": 1,  # MLB
         }
@@ -111,7 +112,7 @@ class MLBClient:
             logger.error("Failed to fetch game details", game_id=game_id, error=str(e))
             return None
 
-    def _parse_schedule_response(self, data: dict) -> list[Game]:
+    def _parse_schedule_response(self, data: dict[str, Any]) -> list[Game]:
         """Parse the MLB API schedule response into Game objects."""
         games = []
 
@@ -132,7 +133,7 @@ class MLBClient:
         logger.info("Parsed schedule", total_games=len(games))
         return games
 
-    def _parse_game_data(self, game_data: dict) -> Game | None:
+    def _parse_game_data(self, game_data: dict[str, Any]) -> Game | None:
         """Parse individual game data from MLB API response."""
         try:
             # Extract basic game information

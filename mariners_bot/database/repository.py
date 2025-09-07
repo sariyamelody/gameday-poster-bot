@@ -1,6 +1,6 @@
 """Repository layer for database operations."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import and_, select, update
@@ -31,13 +31,13 @@ class Repository:
 
             if existing_game:
                 # Update existing game
-                existing_game.date = game.date
-                existing_game.home_team = game.home_team
-                existing_game.away_team = game.away_team
-                existing_game.venue = game.venue
-                existing_game.status = game.status.value
-                existing_game.notification_sent = game.notification_sent
-                existing_game.updated_at = datetime.utcnow()
+                existing_game.date = game.date  # type: ignore[assignment]
+                existing_game.home_team = game.home_team  # type: ignore[assignment]
+                existing_game.away_team = game.away_team  # type: ignore[assignment]
+                existing_game.venue = game.venue  # type: ignore[assignment]
+                existing_game.status = game.status.value  # type: ignore[assignment]
+                existing_game.notification_sent = game.notification_sent  # type: ignore[assignment]
+                existing_game.updated_at = datetime.now(UTC)  # type: ignore[assignment]
 
                 logger.debug("Updated existing game", game_id=game.game_id)
             else:
@@ -82,8 +82,8 @@ class Repository:
                 select(GameRecord)
                 .where(
                     and_(
-                        GameRecord.date > datetime.utcnow(),
-                        not GameRecord.notification_sent,
+                        GameRecord.date > datetime.now(UTC),
+                        ~GameRecord.notification_sent,
                         GameRecord.status == "scheduled"
                     )
                 )
@@ -130,13 +130,13 @@ class Repository:
 
             if existing_job:
                 # Update existing job
-                existing_job.scheduled_time = job.scheduled_time
-                existing_job.message = job.message
-                existing_job.status = job.status.value
-                existing_job.chat_id = job.chat_id
-                existing_job.attempts = job.attempts
-                existing_job.error_message = job.error_message
-                existing_job.sent_at = job.sent_at
+                existing_job.scheduled_time = job.scheduled_time  # type: ignore[assignment]
+                existing_job.message = job.message  # type: ignore[assignment]
+                existing_job.status = job.status.value  # type: ignore[assignment]
+                existing_job.chat_id = job.chat_id  # type: ignore[assignment]
+                existing_job.attempts = job.attempts  # type: ignore[assignment]
+                existing_job.error_message = job.error_message  # type: ignore[assignment]
+                existing_job.sent_at = job.sent_at  # type: ignore[assignment]
 
                 logger.debug("Updated existing notification job", job_id=job_id)
             else:
@@ -191,12 +191,12 @@ class Repository:
 
             if existing_user:
                 # Update existing user
-                existing_user.username = user.username
-                existing_user.first_name = user.first_name
-                existing_user.last_name = user.last_name
-                existing_user.subscribed = user.subscribed
-                existing_user.timezone = user.timezone
-                existing_user.last_seen = user.last_seen
+                existing_user.username = user.username  # type: ignore[assignment]
+                existing_user.first_name = user.first_name  # type: ignore[assignment]
+                existing_user.last_name = user.last_name  # type: ignore[assignment]
+                existing_user.subscribed = user.subscribed  # type: ignore[assignment]
+                existing_user.timezone = user.timezone  # type: ignore[assignment]
+                existing_user.last_seen = user.last_seen  # type: ignore[assignment]
 
                 logger.debug("Updated existing user", chat_id=user.chat_id)
             else:
@@ -241,15 +241,15 @@ class Repository:
         from ..models import GameStatus
 
         return Game(
-            game_id=record.game_id,
-            date=record.date,
-            home_team=record.home_team,
-            away_team=record.away_team,
-            venue=record.venue or "",
+            game_id=record.game_id,  # type: ignore[arg-type]
+            date=record.date,  # type: ignore[arg-type]
+            home_team=record.home_team,  # type: ignore[arg-type]
+            away_team=record.away_team,  # type: ignore[arg-type]
+            venue=record.venue or "",  # type: ignore[arg-type]
             status=GameStatus(record.status),
-            notification_sent=record.notification_sent,
-            created_at=record.created_at,
-            updated_at=record.updated_at,
+            notification_sent=record.notification_sent,  # type: ignore[arg-type]
+            created_at=record.created_at,  # type: ignore[arg-type]
+            updated_at=record.updated_at,  # type: ignore[arg-type]
         )
 
     def _job_record_to_model(self, record: NotificationJobRecord) -> NotificationJob:
@@ -257,27 +257,27 @@ class Repository:
         from ..models import NotificationStatus
 
         return NotificationJob(
-            id=record.id,
-            game_id=record.game_id,
-            scheduled_time=record.scheduled_time,
-            message=record.message,
+            id=record.id,  # type: ignore[arg-type]
+            game_id=record.game_id,  # type: ignore[arg-type]
+            scheduled_time=record.scheduled_time,  # type: ignore[arg-type]
+            message=record.message,  # type: ignore[arg-type]
             status=NotificationStatus(record.status),
-            chat_id=record.chat_id,
-            attempts=record.attempts,
-            error_message=record.error_message,
-            created_at=record.created_at,
-            sent_at=record.sent_at,
+            chat_id=record.chat_id,  # type: ignore[arg-type]
+            attempts=record.attempts,  # type: ignore[arg-type]
+            error_message=record.error_message,  # type: ignore[arg-type]
+            created_at=record.created_at,  # type: ignore[arg-type]
+            sent_at=record.sent_at,  # type: ignore[arg-type]
         )
 
     def _user_record_to_model(self, record: UserRecord) -> User:
         """Convert a UserRecord to a User model."""
         return User(
-            chat_id=record.chat_id,
-            username=record.username,
-            first_name=record.first_name,
-            last_name=record.last_name,
-            subscribed=record.subscribed,
-            timezone=record.timezone,
-            created_at=record.created_at,
-            last_seen=record.last_seen,
+            chat_id=record.chat_id,  # type: ignore[arg-type]
+            username=record.username,  # type: ignore[arg-type]
+            first_name=record.first_name,  # type: ignore[arg-type]
+            last_name=record.last_name,  # type: ignore[arg-type]
+            subscribed=record.subscribed,  # type: ignore[arg-type]
+            timezone=record.timezone,  # type: ignore[arg-type]
+            created_at=record.created_at,  # type: ignore[arg-type]
+            last_seen=record.last_seen,  # type: ignore[arg-type]
         )

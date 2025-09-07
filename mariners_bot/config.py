@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     otel_service_name: str = Field(default="mariners-bot")
     otel_traces_to_stdout: bool = Field(default=False)
     otel_traces_exporter: str = Field(default="none")  # none, console, otlp
+    otel_exporter_otlp_protocol: str = Field(default="http/protobuf")
+    otel_exporter_otlp_endpoint: str = Field(default="https://api.honeycomb.io")
+    otel_exporter_otlp_headers: str = Field(default="")
 
     # Health Check Configuration
     health_check_port: int = Field(default=8000)

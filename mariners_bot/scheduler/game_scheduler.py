@@ -1,6 +1,6 @@
 """Game notification scheduler."""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 import pytz
@@ -51,8 +51,8 @@ class GameScheduler:
         )
 
         # Callback functions
-        self.notification_callback: Callable[[NotificationJob], None] | None = None
-        self.schedule_sync_callback: Callable[[], None] | None = None
+        self.notification_callback: Callable[[NotificationJob], Awaitable[bool]] | None = None
+        self.schedule_sync_callback: Callable[[], Awaitable[None]] | None = None
 
         logger.info("Game scheduler initialized", timezone=settings.scheduler_timezone)
 
@@ -82,12 +82,12 @@ class GameScheduler:
             logger.error("Error during scheduler shutdown", error=str(e))
             raise
 
-    def set_notification_callback(self, callback: Callable[[NotificationJob], None]) -> None:
+    def set_notification_callback(self, callback: Callable[[NotificationJob], Awaitable[bool]]) -> None:
         """Set the callback function for sending notifications."""
         self.notification_callback = callback
         logger.debug("Notification callback set")
 
-    def set_schedule_sync_callback(self, callback: Callable[[], None]) -> None:
+    def set_schedule_sync_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
         """Set the callback function for syncing schedules."""
         self.schedule_sync_callback = callback
         logger.debug("Schedule sync callback set")
