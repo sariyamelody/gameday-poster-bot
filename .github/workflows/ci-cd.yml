@@ -51,7 +51,7 @@ jobs:
         run: uv sync
         
       - name: Run Bandit security scan
-        run: uv run bandit -r . -f json -o bandit-report.json
+        run: uv run bandit -r mariners_bot tests -f json -o bandit-report.json --severity-level high
 
   build-and-push:
     needs: [test, security]

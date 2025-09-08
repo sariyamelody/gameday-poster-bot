@@ -108,7 +108,7 @@ def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) 
 
 def _setup_metric_readers(settings: Settings) -> list[MetricReader]:
     """Configure metric readers based on settings."""
-    
+
     readers = []
 
     # OTLP metrics exporter (for Honeycomb, etc.)
@@ -143,7 +143,7 @@ def _setup_metric_readers(settings: Settings) -> list[MetricReader]:
             readers.append(metric_reader)
         except Exception as e:
             logger.warning(f"Failed to setup OTLP metric exporter: {e}")
-    
+
     return readers
 
 
