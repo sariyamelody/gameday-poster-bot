@@ -1,23 +1,8 @@
-# Build stage
-FROM python:3.11-slim AS builder
+# Single stage build
+FROM python:3.11-slim
 
-WORKDIR /app
-
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
-# Copy dependency files
-COPY pyproject.toml uv.lock* README.md ./
-
-RUN cat /etc/resolv.conf
-# Install dependencies
-RUN uv sync --frozen --no-dev
-
-# Production stage
-FROM python:3.11-slim AS production
-
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Create non-root user with same UID/GID as host user (1000:1000)
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g 1000 -m appuser
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -26,23 +11,26 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy virtual environment from builder
-COPY --from=builder /app/.venv /app/.venv
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy application code
+COPY . .
+
+# Create virtual environment and install everything
+RUN uv sync --frozen --no-dev
 
 # Add venv to path
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Copy application code
-COPY . .
+# Create data and logs directories with proper permissions
+RUN mkdir -p /app/data /app/logs
 
 # Change ownership to appuser
 RUN chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser
-
-# Create data directory
-RUN mkdir -p /app/data /app/logs
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

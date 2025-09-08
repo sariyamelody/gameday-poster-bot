@@ -9,6 +9,7 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import MetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -39,12 +40,10 @@ def setup_telemetry(settings: Settings) -> None:
     # Configure trace exporters based on settings
     _setup_trace_exporters(tracer_provider, settings)
 
-    # Set up metrics
-    metric_provider = MeterProvider(resource=resource)
+    # Set up metrics with readers
+    metric_readers = _setup_metric_readers(settings)
+    metric_provider = MeterProvider(resource=resource, metric_readers=metric_readers)
     metrics.set_meter_provider(metric_provider)
-
-    # Configure metric exporters
-    _setup_metric_exporters(metric_provider, settings)
 
     # Auto-instrument libraries
     _setup_auto_instrumentation()
@@ -107,8 +106,10 @@ def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) 
         logger.info("No trace exporters configured - tracing disabled")
 
 
-def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) -> None:
-    """Configure metric exporters based on settings."""
+def _setup_metric_readers(settings: Settings) -> list[MetricReader]:
+    """Configure metric readers based on settings."""
+    
+    readers = []
 
     # OTLP metrics exporter (for Honeycomb, etc.)
     if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
@@ -139,10 +140,11 @@ def _setup_metric_exporters(metric_provider: MeterProvider, settings: Settings) 
                 exporter=otlp_metric_exporter,
                 export_interval_millis=30000,  # Export every 30 seconds
             )
-            # Note: Direct assignment to _readers is internal API, but needed for SDK setup
-            metric_provider._readers = [metric_reader]  # type: ignore[attr-defined]
+            readers.append(metric_reader)
         except Exception as e:
             logger.warning(f"Failed to setup OTLP metric exporter: {e}")
+    
+    return readers
 
 
 def _setup_auto_instrumentation() -> None:

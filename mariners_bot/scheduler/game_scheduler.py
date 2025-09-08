@@ -16,6 +16,36 @@ from ..models import Game, NotificationJob, NotificationStatus
 
 logger = structlog.get_logger(__name__)
 
+# Global callback storage for scheduler jobs
+_schedule_sync_callback: Callable[[], Awaitable[None]] | None = None
+_notification_callback: Callable[[NotificationJob], Awaitable[bool]] | None = None
+
+
+async def _sync_schedule_wrapper() -> None:
+    """Wrapper for schedule sync with error handling."""
+    try:
+        if _schedule_sync_callback:
+            await _schedule_sync_callback()
+        else:
+            logger.error("No schedule sync callback set")
+
+    except Exception as e:
+        logger.error("Error in schedule sync callback", error=str(e))
+
+
+async def _notification_wrapper(notification_job: NotificationJob) -> None:
+    """Wrapper for notification jobs with error handling."""
+    try:
+        if _notification_callback:
+            success = await _notification_callback(notification_job)
+            if not success:
+                logger.error("Notification callback returned False", job_id=notification_job.id)
+        else:
+            logger.error("No notification callback set")
+
+    except Exception as e:
+        logger.error("Error in notification callback", error=str(e), job_id=notification_job.id)
+
 
 class GameScheduler:
     """Scheduler for managing game notification jobs."""
@@ -50,9 +80,9 @@ class GameScheduler:
             timezone=self.timezone
         )
 
-        # Callback functions
-        self.notification_callback: Callable[[NotificationJob], Awaitable[bool]] | None = None
-        self.schedule_sync_callback: Callable[[], Awaitable[None]] | None = None
+        # Store callbacks in global variables for scheduler jobs
+        global _notification_callback, _schedule_sync_callback
+        # These will be set later by the calling code
 
         logger.info("Game scheduler initialized", timezone=settings.scheduler_timezone)
 
@@ -84,12 +114,14 @@ class GameScheduler:
 
     def set_notification_callback(self, callback: Callable[[NotificationJob], Awaitable[bool]]) -> None:
         """Set the callback function for sending notifications."""
-        self.notification_callback = callback
+        global _notification_callback
+        _notification_callback = callback
         logger.debug("Notification callback set")
 
     def set_schedule_sync_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
         """Set the callback function for syncing schedules."""
-        self.schedule_sync_callback = callback
+        global _schedule_sync_callback
+        _schedule_sync_callback = callback
         logger.debug("Schedule sync callback set")
 
     def schedule_game_notifications(self, games: list[Game]) -> int:
@@ -126,7 +158,7 @@ class GameScheduler:
 
             # Create the job
             self.scheduler.add_job(
-                self._send_notification_wrapper,
+                _notification_wrapper,
                 trigger=DateTrigger(run_date=job.scheduled_time),
                 args=[job],
                 id=job.job_id,
@@ -238,13 +270,14 @@ class GameScheduler:
 
     def _schedule_daily_sync(self) -> None:
         """Schedule the daily schedule sync job."""
-        if not self.schedule_sync_callback:
+        global _schedule_sync_callback
+        if not _schedule_sync_callback:
             logger.warning("No schedule sync callback set, skipping daily sync scheduling")
             return
 
         # Schedule daily at the configured hour (6 AM PT by default)
         self.scheduler.add_job(
-            self._sync_schedule_wrapper,
+            _sync_schedule_wrapper,
             trigger=CronTrigger(
                 hour=self.settings.schedule_sync_hour,
                 minute=0,
@@ -261,28 +294,4 @@ class GameScheduler:
             timezone=self.settings.scheduler_timezone
         )
 
-    async def _send_notification_wrapper(self, job: NotificationJob) -> None:
-        """Wrapper for sending notifications with error handling."""
-        try:
-            if self.notification_callback:
-                await self.notification_callback(job)
-            else:
-                logger.error("No notification callback set", job_id=job.job_id)
 
-        except Exception as e:
-            logger.error(
-                "Error in notification callback",
-                job_id=job.job_id,
-                error=str(e)
-            )
-
-    async def _sync_schedule_wrapper(self) -> None:
-        """Wrapper for schedule sync with error handling."""
-        try:
-            if self.schedule_sync_callback:
-                await self.schedule_sync_callback()
-            else:
-                logger.error("No schedule sync callback set")
-
-        except Exception as e:
-            logger.error("Error in schedule sync callback", error=str(e))
