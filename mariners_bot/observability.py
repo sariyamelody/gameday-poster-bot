@@ -109,7 +109,7 @@ def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) 
 def _setup_metric_readers(settings: Settings) -> list[MetricReader]:
     """Configure metric readers based on settings."""
 
-    readers = []
+    readers: list[MetricReader] = []
 
     # OTLP metrics exporter (for Honeycomb, etc.)
     if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
