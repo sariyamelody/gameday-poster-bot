@@ -55,7 +55,7 @@ class MLBClient:
                 data = await response.json()
 
                 logger.info("MLB API request successful", status=response.status)
-                return data
+                return data  # type: ignore[no-any-return]
 
         except aiohttp.ClientError as e:
             logger.error("MLB API request failed", error=str(e), url=url)
