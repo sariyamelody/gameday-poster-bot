@@ -54,7 +54,6 @@ logs/
 *.sqlite3
 
 # uv
-uv.lock
 
 # Docker
 .dockerignore
