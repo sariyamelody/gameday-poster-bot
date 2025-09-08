@@ -363,9 +363,11 @@ class TelegramBot:
                         location_emoji = "✈️"
                         location_note = "Away Game"
 
-                    # Calculate days until game
-                    from datetime import UTC, datetime
-                    days_until = (game.date.date() - datetime.now(UTC).date()).days
+                    # Calculate days until game (using Pacific Time for local context)
+                    from datetime import datetime
+                    now_pt = datetime.now(pt_timezone).date()
+                    game_date_pt = game_time_pt.date()
+                    days_until = (game_date_pt - now_pt).days
                     span.set_attribute("game.days_until", days_until)
 
                     if days_until == 0:
