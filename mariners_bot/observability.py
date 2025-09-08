@@ -106,7 +106,7 @@ def _setup_trace_exporters(tracer_provider: TracerProvider, settings: Settings) 
         logger.info("No trace exporters configured - tracing disabled")
 
 
-def _setup_metric_readers(settings: Settings) -> list[MetricReader]:
+def _setup_metric_readers(_settings: Settings) -> list[MetricReader]:
     """Configure metric readers based on settings."""
 
     readers: list[MetricReader] = []

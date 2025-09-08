@@ -36,7 +36,7 @@ class MLBClient:
         if self.session:
             await self.session.close()
 
-    @retry(
+    @retry(  # type: ignore[misc]
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10)
     )

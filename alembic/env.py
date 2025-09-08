@@ -1,13 +1,13 @@
-import os
 import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
 # Add project root to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, str(Path(__file__).parent / '..'))
 
 from mariners_bot.config import get_settings
 from mariners_bot.database.models import Base

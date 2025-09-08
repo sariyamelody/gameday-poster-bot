@@ -159,7 +159,7 @@ class TelegramBot:
 
         logger.debug("Bot handlers configured")
 
-    async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_start(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
         if not update.effective_user or not update.effective_chat:
             return
@@ -198,7 +198,7 @@ class TelegramBot:
             if update.message:
                 await update.message.reply_text("Sorry, there was an error processing your request.")
 
-    async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_help(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command."""
         help_message = (
             "⚾ <b>Seattle Mariners Gameday Bot</b>\n\n"
@@ -221,7 +221,7 @@ class TelegramBot:
         if update.message:
             await update.message.reply_text(help_message, parse_mode=ParseMode.HTML)
 
-    async def _handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_status(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /status command."""
         if not update.effective_chat:
             return
@@ -253,7 +253,7 @@ class TelegramBot:
             if update.message:
                 await update.message.reply_text("Sorry, I couldn't check your status right now.")
 
-    async def _handle_subscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_subscribe(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /subscribe command."""
         if not update.effective_user or not update.effective_chat:
             return
@@ -286,7 +286,7 @@ class TelegramBot:
             if update.message:
                 await update.message.reply_text("Sorry, there was an error with your subscription.")
 
-    async def _handle_unsubscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_unsubscribe(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /unsubscribe command."""
         if not update.effective_user or not update.effective_chat:
             return
@@ -319,7 +319,7 @@ class TelegramBot:
             if update.message:
                 await update.message.reply_text("Sorry, there was an error with your request.")
 
-    async def _handle_next_game(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_next_game(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /next_game command."""
         from ..observability import get_tracer
         tracer = get_tracer("mariners-bot.telegram")
@@ -402,7 +402,7 @@ class TelegramBot:
                 if update.message:
                     await update.message.reply_text("Sorry, I couldn't get the next game info right now.")
 
-    async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_message(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle regular messages."""
         if not update.effective_user:
             return

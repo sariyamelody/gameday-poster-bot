@@ -222,10 +222,7 @@ class GameScheduler:
 
         # Skip if game is in the past
         notification_time = game.date - timedelta(minutes=self.settings.notification_advance_minutes)
-        if notification_time < datetime.utcnow():
-            return False
-
-        return True
+        return not notification_time < datetime.utcnow()
 
     def _schedule_game_notification(self, game: Game) -> None:
         """Schedule a notification for a specific game."""

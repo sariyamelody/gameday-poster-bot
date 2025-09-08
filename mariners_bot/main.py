@@ -195,7 +195,7 @@ async def main_async() -> None:
     global bot_instance
 
     # Set up signal handlers for graceful shutdown
-    def signal_handler(signum: int, frame: object) -> None:
+    def signal_handler(signum: int, _frame: object) -> None:
         logger.info("Received shutdown signal", signal=signum)
         if bot_instance:
             asyncio.create_task(bot_instance.stop())

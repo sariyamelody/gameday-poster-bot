@@ -3,7 +3,7 @@
 import asyncio
 import signal
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import structlog
@@ -60,17 +60,15 @@ class HealthServer:
             except TimeoutError:
                 logger.warning("Health server shutdown timed out")
                 self.server_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await self.server_task
-                except asyncio.CancelledError:
-                    pass
 
         logger.info("Health check server stopped")
 
 
 # Standalone health server for development/testing
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> Any:
+async def lifespan(_app: FastAPI) -> Any:
     """FastAPI lifespan context manager."""
     logger.info("Health check API starting up")
     yield
@@ -92,7 +90,7 @@ async def run_health_server_standalone() -> None:
     settings = get_settings()
 
     # Setup signal handlers
-    def signal_handler(signum: int, frame: object) -> None:
+    def signal_handler(signum: int, _frame: object) -> None:
         logger.info("Received shutdown signal", signal=signum)
         sys.exit(0)
 
