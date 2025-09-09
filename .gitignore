@@ -55,6 +55,9 @@ logs/
 
 # uv
 
+# Security scan reports
+bandit-*.json
+
 # Docker
 .dockerignore
 
