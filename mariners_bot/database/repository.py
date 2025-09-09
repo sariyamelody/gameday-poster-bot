@@ -75,6 +75,36 @@ class Repository:
             logger.error("Failed to get game", game_id=game_id, error=str(e))
             raise
 
+    async def get_current_games(self, within_hours: int = 2) -> list[Game]:
+        """Get games that are currently in progress (started within the specified hours)."""
+        from datetime import timedelta
+
+        try:
+            now = datetime.now(UTC)
+            cutoff_time = now - timedelta(hours=within_hours)
+
+            result = await self.session.execute(
+                select(GameRecord)
+                .where(
+                    and_(
+                        GameRecord.date >= cutoff_time,
+                        GameRecord.date <= now,
+                        GameRecord.status.in_(["scheduled", "live"])
+                    )
+                )
+                .order_by(GameRecord.date.desc())
+            )
+
+            games = []
+            for record in result.scalars():
+                games.append(self._game_record_to_model(record))
+
+            return games
+
+        except Exception as e:
+            logger.error("Failed to get current games", error=str(e))
+            raise
+
     async def get_upcoming_games(self, limit: int = 10) -> list[Game]:
         """Get upcoming games that haven't been notified yet."""
         try:

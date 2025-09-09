@@ -321,6 +321,7 @@ class TelegramBot:
 
     async def _handle_next_game(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /next_game command."""
+        from datetime import datetime, timedelta
         from ..observability import get_tracer
         tracer = get_tracer("mariners-bot.telegram")
 
@@ -331,11 +332,66 @@ class TelegramBot:
             try:
                 async with self.db_session.get_session() as session:
                     repository = Repository(session)
+                    # Check for current games first (within 2 hours of start)
+                    current_games = await repository.get_current_games(within_hours=2)
                     upcoming_games = await repository.get_upcoming_games(limit=1)
 
-                span.set_attribute("games_found", len(upcoming_games))
+                span.set_attribute("current_games_found", len(current_games))
+                span.set_attribute("upcoming_games_found", len(upcoming_games))
 
-                if not upcoming_games:
+                if current_games:
+                    # Show current game in progress
+                    game = current_games[0]
+                    span.set_attribute("current_game.id", game.game_id)
+                    span.set_attribute("current_game.opponent", game.opponent)
+                    span.set_attribute("current_game.is_home", game.is_mariners_home)
+
+                    # Convert to Pacific time for display
+                    import pytz
+                    pt_timezone = pytz.timezone("America/Los_Angeles")
+                    game_time_pt = game.date.astimezone(pt_timezone)
+
+                    # Calculate how long ago the game started
+                    now_pt = datetime.now(pt_timezone)
+                    time_since_start = now_pt - game_time_pt
+
+                    # Determine if Mariners are home or away
+                    if game.is_mariners_home:
+                        matchup = f"<b>{game.opponent} @ Seattle Mariners</b>"
+                        location_emoji = "🏠"
+                        location_note = "Home Game"
+                    else:
+                        matchup = f"<b>Seattle Mariners @ {game.opponent}</b>"
+                        location_emoji = "✈️"
+                        location_note = "Away Game"
+
+                    # Format time since start
+                    if time_since_start < timedelta(minutes=1):
+                        time_status = "🚨 <b>STARTING NOW!</b>"
+                    elif time_since_start < timedelta(hours=1):
+                        minutes = int(time_since_start.total_seconds() / 60)
+                        time_status = f"🔴 <b>LIVE</b> - Started {minutes} min ago"
+                    else:
+                        hours = int(time_since_start.total_seconds() / 3600)
+                        minutes = int((time_since_start.total_seconds() % 3600) / 60)
+                        if minutes > 0:
+                            time_status = f"🔴 <b>LIVE</b> - Started {hours}h {minutes}m ago"
+                        else:
+                            time_status = f"🔴 <b>LIVE</b> - Started {hours}h ago"
+
+                    message = (
+                        f"⚾ <b>Current Mariners Game</b>\n\n"
+                        f"🏟️ {matchup}\n"
+                        f"{location_emoji} {location_note}\n"
+                        f"{time_status}\n\n"
+                        f"📅 <b>Started:</b> {game_time_pt.strftime('%A, %B %d, %Y')}\n"
+                        f"🕐 <b>First Pitch:</b> {game_time_pt.strftime('%I:%M %p %Z')}\n"
+                        f"📍 <b>Venue:</b> {game.venue}\n\n"
+                        f"<a href=\"{game.gameday_url}\">🔗 Watch LIVE on MLB Gameday</a>\n\n"
+                        f"Go Mariners! 🌊⚾"
+                    )
+
+                elif not upcoming_games:
                     message = (
                         "🤔 <b>No upcoming games found</b>\n\n"
                         "There are no scheduled Mariners games in the near future. "
@@ -364,10 +420,9 @@ class TelegramBot:
                         location_note = "Away Game"
 
                     # Calculate days until game (using Pacific Time for local context)
-                    from datetime import datetime
-                    now_pt = datetime.now(pt_timezone).date()
+                    now_pt_date = datetime.now(pt_timezone).date()
                     game_date_pt = game_time_pt.date()
-                    days_until = (game_date_pt - now_pt).days
+                    days_until = (game_date_pt - now_pt_date).days
                     span.set_attribute("game.days_until", days_until)
 
                     if days_until == 0:
