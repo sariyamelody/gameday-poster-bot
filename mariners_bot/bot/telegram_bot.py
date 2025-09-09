@@ -152,9 +152,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("next_game", self._handle_next_game))
         self.application.add_handler(CommandHandler("nextgame", self._handle_next_game))
 
-        # Message handler for regular text
+        # Message handler for regular text - only respond in private chats
         self.application.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
+            MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self._handle_message)
         )
 
         logger.debug("Bot handlers configured")
