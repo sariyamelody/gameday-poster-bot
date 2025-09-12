@@ -388,7 +388,8 @@ class TelegramBot:
                         f"📅 <b>Started:</b> {game_time_pt.strftime('%A, %B %d, %Y')}\n"
                         f"🕐 <b>First Pitch:</b> {game_time_pt.strftime('%I:%M %p %Z')}\n"
                         f"📍 <b>Venue:</b> {game.venue}\n\n"
-                        f"<a href=\"{game.gameday_url}\">🔗 Watch LIVE on MLB Gameday</a>\n\n"
+                        f"<a href=\"{game.gameday_url}\">🔗 Watch LIVE on MLB Gameday</a>\n"
+                        f"<a href=\"{game.baseball_savant_url}\">📊 Advanced Analytics on Baseball Savant</a>\n\n"
                         f"Go Mariners! 🌊⚾"
                     )
 
@@ -443,7 +444,8 @@ class TelegramBot:
                         f"📅 <b>Date:</b> {game_time_pt.strftime('%A, %B %d, %Y')}\n"
                         f"🕐 <b>Time:</b> {game_time_pt.strftime('%I:%M %p %Z')}\n"
                         f"📍 <b>Venue:</b> {game.venue}\n\n"
-                        f"<a href=\"{game.gameday_url}\">🔗 Watch on MLB Gameday</a>\n\n"
+                        f"<a href=\"{game.gameday_url}\">🔗 Watch on MLB Gameday</a>\n"
+                        f"<a href=\"{game.baseball_savant_url}\">📊 Advanced Analytics on Baseball Savant</a>\n\n"
                         f"I'll send a notification 5 minutes before first pitch! 🚨"
                     )
 

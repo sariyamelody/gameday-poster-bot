@@ -281,8 +281,9 @@ class GameScheduler:
             f"🏟️ {venue}\n"
             f"📍 Playing {location_text} {location_emoji}\n"
             f"{pitcher_info}"
-            f"🕐 Starts in {self.settings.notification_advance_minutes} minutes ({time_str})\n"
-            f"📺 <a href=\"{game.gameday_url}\">Watch Live on MLB Gameday</a>"
+            f"🕐 Starts in {self.settings.notification_advance_minutes} minutes ({time_str})\n\n"
+            f"📺 <a href=\"{game.gameday_url}\">Watch Live on MLB Gameday</a>\n"
+            f"📊 <a href=\"{game.baseball_savant_url}\">Advanced Analytics on Baseball Savant</a>"
         )
 
         return message

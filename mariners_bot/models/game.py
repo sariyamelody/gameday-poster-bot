@@ -35,6 +35,11 @@ class Game(BaseModel):
         return f"https://www.mlb.com/gameday/{self.game_id}"
 
     @property
+    def baseball_savant_url(self) -> str:
+        """Generate Baseball Savant Gamefeed URL for this game."""
+        return f"https://baseballsavant.mlb.com/gamefeed?gamePk={self.game_id}"
+
+    @property
     def is_mariners_home(self) -> bool:
         """Check if Mariners are the home team."""
         return "mariners" in self.home_team.lower() or "seattle" in self.home_team.lower()
