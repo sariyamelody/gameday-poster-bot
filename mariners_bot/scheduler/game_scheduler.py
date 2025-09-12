@@ -124,14 +124,14 @@ class GameScheduler:
         _schedule_sync_callback = callback
         logger.debug("Schedule sync callback set")
 
-    def schedule_game_notifications(self, games: list[Game]) -> int:
+    async def schedule_game_notifications(self, games: list[Game]) -> int:
         """Schedule notification jobs for a list of games."""
         scheduled_count = 0
 
         for game in games:
             if self._should_schedule_game(game):
                 try:
-                    self._schedule_game_notification(game)
+                    await self._schedule_game_notification(game)
                     scheduled_count += 1
 
                 except Exception as e:
@@ -224,13 +224,13 @@ class GameScheduler:
         notification_time = game.date - timedelta(minutes=self.settings.notification_advance_minutes)
         return not notification_time < datetime.utcnow()
 
-    def _schedule_game_notification(self, game: Game) -> None:
+    async def _schedule_game_notification(self, game: Game) -> None:
         """Schedule a notification for a specific game."""
         # Calculate notification time (5 minutes before game start)
         notification_time = game.date - timedelta(minutes=self.settings.notification_advance_minutes)
 
         # Create notification job
-        message = self._create_notification_message(game)
+        message = await self._create_notification_message(game)
         job = NotificationJob(
             game_id=game.game_id,
             scheduled_time=notification_time,
@@ -241,7 +241,7 @@ class GameScheduler:
         # Schedule the job
         self.schedule_notification_job(job)
 
-    def _create_notification_message(self, game: Game) -> str:
+    async def _create_notification_message(self, game: Game) -> str:
         """Create the notification message for a game."""
         opponent = game.opponent
         venue = game.venue
@@ -254,11 +254,33 @@ class GameScheduler:
         location_emoji = "🏠" if game.is_mariners_home else "✈️"
         location_text = "at home" if game.is_mariners_home else "away"
 
+        # Try to get pitching matchup
+        pitcher_info = ""
+        try:
+            from ..clients import MLBClient
+            async with MLBClient(self.settings) as mlb_client:
+                pitchers = await mlb_client.get_probable_pitchers(game.game_id)
+                if pitchers:
+                    if game.is_mariners_home:
+                        mariners_pitcher = pitchers.get("home")
+                        opponent_pitcher = pitchers.get("away")
+                    else:
+                        mariners_pitcher = pitchers.get("away")
+                        opponent_pitcher = pitchers.get("home")
+
+                    if mariners_pitcher and opponent_pitcher:
+                        pitcher_info = f"🥎 <b>Pitching:</b> {mariners_pitcher} vs {opponent_pitcher}\n"
+                    elif mariners_pitcher:
+                        pitcher_info = f"🥎 <b>Mariners Pitcher:</b> {mariners_pitcher}\n"
+        except Exception as e:
+            logger.warning("Failed to get pitcher information", game_id=game.game_id, error=str(e))
+
         message = (
             f"🔥 <b>Mariners Game Starting Soon!</b>\n"
             f"⚾ Seattle Mariners vs {opponent}\n"
             f"🏟️ {venue}\n"
             f"📍 Playing {location_text} {location_emoji}\n"
+            f"{pitcher_info}"
             f"🕐 Starts in {self.settings.notification_advance_minutes} minutes ({time_str})\n"
             f"📺 <a href=\"{game.gameday_url}\">Watch Live on MLB Gameday</a>"
         )

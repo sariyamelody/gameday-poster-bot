@@ -112,6 +112,59 @@ class MLBClient:
             logger.error("Failed to fetch game details", game_id=game_id, error=str(e))
             return None
 
+    async def get_probable_pitchers(self, game_id: str) -> dict[str, str] | None:
+        """Get probable pitchers for a specific game."""
+        params = {
+            "gamePk": game_id,
+            "hydrate": "probablePitcher"
+        }
+
+        try:
+            data = await self._make_request("schedule", params=params)
+
+            for date_entry in data.get("dates", []):
+                for game_data in date_entry.get("games", []):
+                    if str(game_data.get("gamePk")) == game_id:
+                        return self._parse_probable_pitchers(game_data)
+
+            logger.warning("Game not found in pitcher data", game_id=game_id)
+            return None
+
+        except Exception as e:
+            logger.error("Failed to fetch probable pitchers", game_id=game_id, error=str(e))
+            return None
+
+    def _parse_probable_pitchers(self, game_data: dict[str, Any]) -> dict[str, str] | None:
+        """Parse probable pitcher information from game data."""
+        try:
+            teams = game_data.get("teams", {})
+            pitchers = {}
+
+            # Get home pitcher
+            home_pitcher = (
+                teams.get("home", {})
+                .get("probablePitcher", {})
+                .get("fullName")
+            )
+
+            # Get away pitcher
+            away_pitcher = (
+                teams.get("away", {})
+                .get("probablePitcher", {})
+                .get("fullName")
+            )
+
+            if home_pitcher:
+                pitchers["home"] = home_pitcher
+            if away_pitcher:
+                pitchers["away"] = away_pitcher
+
+            return pitchers if pitchers else None
+
+        except Exception as e:
+            logger.warning("Failed to parse probable pitchers", error=str(e))
+            return None
+
     def _parse_schedule_response(self, data: dict[str, Any]) -> list[Game]:
         """Parse the MLB API schedule response into Game objects."""
         games = []

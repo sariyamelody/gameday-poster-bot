@@ -149,7 +149,7 @@ class MarinersBot:
 
             # Schedule notifications for upcoming games
             upcoming_games = await self._get_upcoming_games()
-            scheduled_count = self.scheduler.schedule_game_notifications(upcoming_games)
+            scheduled_count = await self.scheduler.schedule_game_notifications(upcoming_games)
 
             logger.info(
                 "Schedule sync completed",

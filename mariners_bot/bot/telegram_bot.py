@@ -322,6 +322,7 @@ class TelegramBot:
     async def _handle_next_game(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /next_game command."""
         from datetime import datetime, timedelta
+
         from ..observability import get_tracer
         tracer = get_tracer("mariners-bot.telegram")
 
@@ -447,7 +448,7 @@ class TelegramBot:
                     )
 
                 if update.message:
-                    await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+                    await update.message.reply_text(message, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
                     span.set_attribute("response.sent", True)
 
             except Exception as e:
@@ -498,7 +499,7 @@ class TelegramBot:
                     chat_id=chat_id,
                     text=message,
                     parse_mode=ParseMode.HTML,
-                    disable_web_page_preview=False
+                    disable_web_page_preview=True
                 )
                 return True
 
