@@ -380,11 +380,33 @@ class TelegramBot:
                         else:
                             time_status = f"🔴 <b>LIVE</b> - Started {hours}h ago"
 
+                    # Try to get pitching matchup
+                    pitcher_info = ""
+                    try:
+                        from ..clients import MLBClient
+                        async with MLBClient(self.settings) as mlb_client:
+                            pitchers = await mlb_client.get_probable_pitchers(game.game_id)
+                            if pitchers:
+                                if game.is_mariners_home:
+                                    mariners_pitcher = pitchers.get("home")
+                                    opponent_pitcher = pitchers.get("away")
+                                else:
+                                    mariners_pitcher = pitchers.get("away")
+                                    opponent_pitcher = pitchers.get("home")
+
+                                if mariners_pitcher and opponent_pitcher:
+                                    pitcher_info = f"🥎 <b>Pitching:</b> {mariners_pitcher} vs {opponent_pitcher}\n"
+                                elif mariners_pitcher:
+                                    pitcher_info = f"🥎 <b>Mariners Pitcher:</b> {mariners_pitcher}\n"
+                    except Exception as e:
+                        logger.warning("Failed to get pitcher information for current game", game_id=game.game_id, error=str(e))
+
                     message = (
                         f"⚾ <b>Current Mariners Game</b>\n\n"
                         f"🏟️ {matchup}\n"
                         f"{location_emoji} {location_note}\n"
-                        f"{time_status}\n\n"
+                        f"{time_status}\n"
+                        f"{pitcher_info}\n"
                         f"📅 <b>Started:</b> {game_time_pt.strftime('%A, %B %d, %Y')}\n"
                         f"🕐 <b>First Pitch:</b> {game_time_pt.strftime('%I:%M %p %Z')}\n"
                         f"📍 <b>Venue:</b> {game.venue}\n\n"
@@ -436,11 +458,33 @@ class TelegramBot:
                     else:
                         time_note = f"📅 In {days_until} days"
 
+                    # Try to get pitching matchup
+                    pitcher_info = ""
+                    try:
+                        from ..clients import MLBClient
+                        async with MLBClient(self.settings) as mlb_client:
+                            pitchers = await mlb_client.get_probable_pitchers(game.game_id)
+                            if pitchers:
+                                if game.is_mariners_home:
+                                    mariners_pitcher = pitchers.get("home")
+                                    opponent_pitcher = pitchers.get("away")
+                                else:
+                                    mariners_pitcher = pitchers.get("away")
+                                    opponent_pitcher = pitchers.get("home")
+
+                                if mariners_pitcher and opponent_pitcher:
+                                    pitcher_info = f"🥎 <b>Pitching:</b> {mariners_pitcher} vs {opponent_pitcher}\n"
+                                elif mariners_pitcher:
+                                    pitcher_info = f"🥎 <b>Mariners Pitcher:</b> {mariners_pitcher}\n"
+                    except Exception as e:
+                        logger.warning("Failed to get pitcher information for upcoming game", game_id=game.game_id, error=str(e))
+
                     message = (
                         f"⚾ <b>Next Mariners Game</b>\n\n"
                         f"🏟️ {matchup}\n"
                         f"{location_emoji} {location_note}\n"
-                        f"{time_note}\n\n"
+                        f"{time_note}\n"
+                        f"{pitcher_info}\n"
                         f"📅 <b>Date:</b> {game_time_pt.strftime('%A, %B %d, %Y')}\n"
                         f"🕐 <b>Time:</b> {game_time_pt.strftime('%I:%M %p %Z')}\n"
                         f"📍 <b>Venue:</b> {game.venue}\n\n"
