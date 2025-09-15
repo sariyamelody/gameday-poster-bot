@@ -1,6 +1,6 @@
 """MLB Stats API client."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, date
 from typing import Any
 
 import aiohttp
@@ -8,7 +8,7 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config import Settings
-from ..models import Game, GameStatus
+from ..models import Game, GameStatus, Transaction
 
 logger = structlog.get_logger(__name__)
 
@@ -235,3 +235,130 @@ class MLBClient:
         }
 
         return status_mapping.get(status_code, GameStatus.SCHEDULED)
+    
+    async def get_team_transactions(
+        self,
+        team_id: int | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None
+    ) -> list[Transaction]:
+        """Get transactions for a team within a date range."""
+        params: dict[str, Any] = {}
+        
+        if team_id:
+            params["teamId"] = team_id
+        
+        if start_date:
+            params["startDate"] = start_date.isoformat()
+        
+        if end_date:
+            params["endDate"] = end_date.isoformat()
+        
+        try:
+            data = await self._make_request("transactions", params=params)
+            return self._parse_transactions_response(data)
+        
+        except Exception as e:
+            logger.error("Failed to fetch team transactions", error=str(e))
+            raise
+    
+    async def get_mariners_transactions(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None
+    ) -> list[Transaction]:
+        """Get Mariners transactions within a date range."""
+        return await self.get_team_transactions(
+            team_id=self.team_id,
+            start_date=start_date,
+            end_date=end_date
+        )
+    
+    def _parse_transactions_response(self, data: dict[str, Any]) -> list[Transaction]:
+        """Parse the MLB API transactions response into Transaction objects."""
+        transactions = []
+        
+        for transaction_data in data.get("transactions", []):
+            try:
+                transaction = self._parse_transaction_data(transaction_data)
+                if transaction:
+                    transactions.append(transaction)
+            except Exception as e:
+                logger.warning(
+                    "Failed to parse transaction data",
+                    transaction_id=transaction_data.get("id"),
+                    error=str(e)
+                )
+                continue
+        
+        logger.info("Parsed transactions", total_transactions=len(transactions))
+        return transactions
+    
+    def _parse_transaction_data(self, transaction_data: dict[str, Any]) -> Transaction | None:
+        """Parse individual transaction data from MLB API response."""
+        try:
+            # Extract basic transaction information
+            transaction_id = transaction_data["id"]
+            
+            # Person information
+            person = transaction_data["person"]
+            person_id = person["id"]
+            person_name = person["fullName"]
+            
+            # Team information
+            from_team_id = None
+            from_team_name = None
+            to_team_id = None
+            to_team_name = None
+            
+            if "fromTeam" in transaction_data:
+                from_team = transaction_data["fromTeam"]
+                from_team_id = from_team["id"]
+                from_team_name = from_team["name"]
+            
+            if "toTeam" in transaction_data:
+                to_team = transaction_data["toTeam"]
+                to_team_id = to_team["id"]
+                to_team_name = to_team["name"]
+            
+            # Date information
+            transaction_date = datetime.fromisoformat(
+                transaction_data["date"]
+            ).date()
+            
+            effective_date = None
+            if "effectiveDate" in transaction_data:
+                effective_date = datetime.fromisoformat(
+                    transaction_data["effectiveDate"]
+                ).date()
+            
+            resolution_date = None
+            if "resolutionDate" in transaction_data:
+                resolution_date = datetime.fromisoformat(
+                    transaction_data["resolutionDate"]
+                ).date()
+            
+            # Transaction type and description
+            type_code = transaction_data["typeCode"]
+            type_description = transaction_data["typeDesc"]
+            description = transaction_data["description"]
+            
+            return Transaction(
+                transaction_id=transaction_id,
+                person_id=person_id,
+                person_name=person_name,
+                from_team_id=from_team_id,
+                from_team_name=from_team_name,
+                to_team_id=to_team_id,
+                to_team_name=to_team_name,
+                transaction_date=transaction_date,
+                effective_date=effective_date,
+                resolution_date=resolution_date,
+                type_code=type_code,
+                type_description=type_description,
+                description=description
+            )
+        
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error("Failed to parse transaction data", error=str(e), data=transaction_data)
+            return None

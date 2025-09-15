@@ -1,12 +1,24 @@
 # Seattle Mariners Gameday Telegram Bot
 
-A Telegram bot that automatically notifies you 5 minutes before Seattle Mariners games start with a direct link to MLB Gameday.
+A Telegram bot that automatically notifies you 5 minutes before Seattle Mariners games start with a direct link to MLB Gameday, plus real-time transaction monitoring with customizable notifications.
 
 ## Features
 
+### Game Notifications
 - 🔔 **Automatic Notifications**: Get notified 5 minutes before each Mariners game
 - ⚾ **Game Information**: Opponent, venue, and start time details
 - 🔗 **Direct Links**: One-click access to MLB Gameday
+- 🏟️ **Current Game Status**: Live game detection and status updates
+- 🥎 **Pitching Matchups**: Probable pitcher information
+
+### Transaction Monitoring
+- 📰 **Real-time Transactions**: Monitor MLB transactions every 5 minutes
+- 🔄 **Batch Notifications**: Multiple transactions grouped into single messages
+- ⚙️ **Customizable Preferences**: Users can choose which transaction types to receive
+- 🏆 **Major League Filter**: Option to only receive major league transactions
+- 📱 **Channel & Personal**: All transactions go to channel, users customize personal notifications
+
+### Technical Features
 - 🌍 **Timezone Aware**: Handles Pacific Time and daylight saving transitions
 - 📊 **Observability**: OpenTelemetry monitoring and structured logging
 - 🐳 **Docker Ready**: Containerized deployment with Docker Compose
@@ -67,6 +79,25 @@ docker-compose up -d
 
 # Monitor traces and metrics in Honeycomb UI
 ```
+
+## Bot Commands
+
+### Game Commands
+- `/start` - Start using the bot and get an introduction
+- `/help` - Show comprehensive help with all commands
+- `/status` - Check your current subscription status
+- `/subscribe` - Subscribe to game notifications
+- `/unsubscribe` - Unsubscribe from all notifications
+- `/nextgame` or `/next_game` - Get info about the next upcoming game
+
+### Transaction Commands
+- `/transactions` - View recent Mariners transactions (last 14 days)
+- `/transaction_settings` - View and manage transaction notification preferences
+- `/toggle_trades` - Toggle trade notifications on/off
+- `/toggle_signings` - Toggle free agent signing notifications on/off
+- `/toggle_injuries` - Toggle injury list notifications on/off
+- `/toggle_recalls` - Toggle player recall/option notifications on/off
+- `/toggle_major_only` - Toggle major league only filter on/off
 
 ## Configuration
 

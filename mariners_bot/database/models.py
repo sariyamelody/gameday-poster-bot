@@ -69,3 +69,63 @@ class UserRecord(Base):
     def __repr__(self) -> str:
         """String representation of the user record."""
         return f"<UserRecord(chat_id={self.chat_id}, username={self.username})>"
+
+
+class TransactionRecord(Base):
+    """SQLAlchemy model for MLB transactions table."""
+
+    __tablename__ = "transactions"
+
+    transaction_id = Column(Integer, primary_key=True, index=True)
+    person_id = Column(Integer, nullable=False, index=True)
+    person_name = Column(String, nullable=False)
+    
+    from_team_id = Column(Integer, index=True)
+    from_team_name = Column(String)
+    to_team_id = Column(Integer, index=True)
+    to_team_name = Column(String)
+    
+    transaction_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    effective_date = Column(DateTime(timezone=True))
+    resolution_date = Column(DateTime(timezone=True))
+    
+    type_code = Column(String, nullable=False, index=True)
+    type_description = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    
+    notification_sent = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    def __repr__(self) -> str:
+        """String representation of the transaction record."""
+        return f"<TransactionRecord(id={self.transaction_id}, player={self.person_name}, type={self.type_code})>"
+
+
+class UserTransactionPreference(Base):
+    """SQLAlchemy model for user transaction notification preferences."""
+
+    __tablename__ = "user_transaction_preferences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(Integer, nullable=False, index=True)
+    
+    # Transaction type preferences
+    trades = Column(Boolean, default=True)
+    signings = Column(Boolean, default=True)
+    recalls = Column(Boolean, default=True)
+    options = Column(Boolean, default=True)
+    injuries = Column(Boolean, default=True)
+    activations = Column(Boolean, default=True)
+    releases = Column(Boolean, default=False)
+    status_changes = Column(Boolean, default=False)
+    other = Column(Boolean, default=False)
+    
+    # Only major league transactions (vs minor league)
+    major_league_only = Column(Boolean, default=True)
+    
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        """String representation of the user preference record."""
+        return f"<UserTransactionPreference(chat_id={self.chat_id})>"

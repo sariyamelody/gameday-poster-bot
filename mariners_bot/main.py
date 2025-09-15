@@ -14,9 +14,10 @@ from .bot import TelegramBot
 from .clients import MLBClient
 from .config import get_settings
 from .database import Repository, get_database_session
-from .models import Game
+from .models import Game, Transaction
 from .observability import create_app_metrics, get_tracer, setup_telemetry
 from .scheduler import GameScheduler
+from .scheduler.transaction_scheduler import TransactionScheduler, TransactionNotificationBatcher
 
 # Setup structured logging
 structlog.configure(
@@ -53,6 +54,8 @@ class MarinersBot:
 
         self.db_session = get_database_session(self.settings)
         self.scheduler = GameScheduler(self.settings)
+        self.transaction_scheduler = TransactionScheduler(self.settings)
+        self.transaction_batcher = TransactionNotificationBatcher(batch_window_minutes=10)
         self.telegram_bot = TelegramBot(self.settings)
         self.health_server = HealthServer()
         self.running = False
@@ -60,6 +63,7 @@ class MarinersBot:
         # Setup scheduler callbacks
         self.scheduler.set_notification_callback(self.telegram_bot.send_notification)
         self.scheduler.set_schedule_sync_callback(self._sync_schedule)
+        self.transaction_scheduler.set_transaction_sync_callback(self._sync_transactions)
 
         logger.info("Mariners bot initialized", version="0.1.0")
 
@@ -77,8 +81,14 @@ class MarinersBot:
             # Start scheduler
             await self.scheduler.start()
 
+            # Start transaction scheduler
+            await self.transaction_scheduler.start()
+
             # Perform initial schedule sync
             await self._sync_schedule()
+
+            # Perform initial transaction sync
+            await self._sync_transactions()
 
             # Start Telegram bot
             await self.telegram_bot.start_polling()
@@ -106,6 +116,9 @@ class MarinersBot:
 
             # Stop scheduler
             await self.scheduler.shutdown()
+
+            # Stop transaction scheduler
+            await self.transaction_scheduler.shutdown()
 
             # Stop health server
             await self.health_server.stop()
@@ -184,6 +197,190 @@ class MarinersBot:
         except Exception as e:
             logger.error("Failed to get upcoming games", error=str(e))
             return []
+
+    async def _sync_transactions(self) -> None:
+        """Sync the latest Mariners transactions from MLB API."""
+        logger.info("Starting transaction sync")
+
+        try:
+            # Fetch transactions for the last 7 days (to catch any recent updates)
+            start_date = (datetime.now() - timedelta(days=7)).date()
+            end_date = datetime.now().date()
+
+            async with MLBClient(self.settings) as mlb_client:
+                transactions = await mlb_client.get_mariners_transactions(
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+            if not transactions:
+                logger.debug("No transactions found in sync")
+                return
+
+            # Save transactions to database and identify new ones
+            new_transactions = []
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+
+                for transaction in transactions:
+                    if transaction.is_mariners_transaction:
+                        # Check if this is a new transaction
+                        existing = await self._is_transaction_existing(repository, transaction.transaction_id)
+                        if not existing:
+                            new_transactions.append(transaction)
+                        
+                        await repository.save_transaction(transaction)
+
+            if new_transactions:
+                logger.info("Found new transactions", count=len(new_transactions))
+                await self._process_new_transactions(new_transactions)
+            else:
+                logger.debug("No new transactions to process")
+
+            # Process any pending batched notifications
+            await self._process_pending_transaction_batches()
+
+            logger.info(
+                "Transaction sync completed",
+                total_transactions=len(transactions),
+                new_transactions=len(new_transactions)
+            )
+
+        except Exception as e:
+            logger.error("Failed to sync transactions", error=str(e))
+            raise
+
+    async def _is_transaction_existing(self, repository: Repository, transaction_id: int) -> bool:
+        """Check if a transaction already exists in the database."""
+        try:
+            # Try to get existing transactions that haven't been notified
+            new_transactions = await repository.get_new_transactions()
+            existing_ids = {t.transaction_id for t in new_transactions}
+            return transaction_id in existing_ids
+        except Exception:
+            # If we can't check, assume it's new to be safe
+            return False
+
+    async def _process_new_transactions(self, transactions: list[Transaction]) -> None:
+        """Process new transactions and send notifications."""
+        try:
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+
+                # Send notifications to channel (all transactions, no batching for channel)
+                if self.settings.telegram_chat_id:
+                    await self._send_channel_transaction_notifications(transactions)
+
+                # Process individual user notifications with batching
+                for transaction in transactions:
+                    users_preferences = await repository.get_users_for_transaction_notification(transaction)
+                    
+                    for user, preferences in users_preferences:
+                        await self._handle_user_transaction_notification(user.chat_id, transaction, repository)
+
+        except Exception as e:
+            logger.error("Failed to process new transactions", error=str(e))
+
+    async def _send_channel_transaction_notifications(self, transactions: list[Transaction]) -> None:
+        """Send transaction notifications to the main channel."""
+        try:
+            if not self.settings.telegram_chat_id:
+                return
+
+            # Sort transactions by priority and date
+            transactions.sort(key=lambda t: (t.transaction_date, t.transaction_id))
+            
+            # Split into optimal batches
+            batches = TransactionNotificationBatcher.split_transactions_for_batching(transactions)
+            
+            for batch in batches:
+                message = Transaction.format_batch_notification_message(batch)
+                if message:
+                    success = await self.telegram_bot._send_message_with_retry(
+                        chat_id=self.settings.telegram_chat_id,
+                        message=message
+                    )
+                    
+                    if success:
+                        logger.info("Sent channel transaction notification", batch_size=len(batch))
+                    else:
+                        logger.error("Failed to send channel transaction notification", batch_size=len(batch))
+
+        except Exception as e:
+            logger.error("Failed to send channel transaction notifications", error=str(e))
+
+    async def _handle_user_transaction_notification(self, chat_id: int, transaction: Transaction, repository: Repository) -> None:
+        """Handle transaction notification for a specific user with batching."""
+        try:
+            # Check if we should batch this notification
+            should_batch = self.transaction_batcher.should_batch_notification(chat_id, transaction)
+            
+            if should_batch:
+                # Add to batch
+                self.transaction_batcher.add_transaction_to_batch(chat_id, transaction)
+                logger.debug("Added transaction to user batch", chat_id=chat_id, transaction_id=transaction.transaction_id)
+            else:
+                # Send immediately (possibly with any pending batch)
+                pending_batch = self.transaction_batcher.get_and_clear_batch(chat_id)
+                all_transactions = pending_batch + [transaction]
+                
+                message = Transaction.format_batch_notification_message(all_transactions)
+                if message:
+                    success = await self.telegram_bot._send_message_with_retry(
+                        chat_id=str(chat_id),
+                        message=message
+                    )
+                    
+                    if success:
+                        self.transaction_batcher.mark_notification_sent(chat_id)
+                        # Mark all transactions as notified
+                        for t in all_transactions:
+                            await repository.mark_transaction_notified(t.transaction_id)
+                        
+                        logger.info("Sent user transaction notification", 
+                                  chat_id=chat_id, batch_size=len(all_transactions))
+                    else:
+                        logger.error("Failed to send user transaction notification", chat_id=chat_id)
+
+        except Exception as e:
+            logger.error("Failed to handle user transaction notification", 
+                        chat_id=chat_id, transaction_id=transaction.transaction_id, error=str(e))
+
+    async def _process_pending_transaction_batches(self) -> None:
+        """Process any pending transaction batches that should be sent."""
+        try:
+            users_to_notify = self.transaction_batcher.get_users_with_pending_batches()
+            
+            if not users_to_notify:
+                return
+
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+
+                for chat_id in users_to_notify:
+                    pending_transactions = self.transaction_batcher.get_and_clear_batch(chat_id)
+                    
+                    if pending_transactions:
+                        message = Transaction.format_batch_notification_message(pending_transactions)
+                        if message:
+                            success = await self.telegram_bot._send_message_with_retry(
+                                chat_id=str(chat_id),
+                                message=message
+                            )
+                            
+                            if success:
+                                self.transaction_batcher.mark_notification_sent(chat_id)
+                                # Mark all transactions as notified
+                                for transaction in pending_transactions:
+                                    await repository.mark_transaction_notified(transaction.transaction_id)
+                                
+                                logger.info("Sent pending transaction batch", 
+                                          chat_id=chat_id, batch_size=len(pending_transactions))
+                            else:
+                                logger.error("Failed to send pending transaction batch", chat_id=chat_id)
+
+        except Exception as e:
+            logger.error("Failed to process pending transaction batches", error=str(e))
 
 
 # Global bot instance

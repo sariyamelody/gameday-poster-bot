@@ -151,6 +151,13 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("unsubscribe", self._handle_unsubscribe))
         self.application.add_handler(CommandHandler("next_game", self._handle_next_game))
         self.application.add_handler(CommandHandler("nextgame", self._handle_next_game))
+        self.application.add_handler(CommandHandler("transactions", self._handle_transactions))
+        self.application.add_handler(CommandHandler("transaction_settings", self._handle_transaction_settings))
+        self.application.add_handler(CommandHandler("toggle_trades", self._handle_toggle_trades))
+        self.application.add_handler(CommandHandler("toggle_signings", self._handle_toggle_signings))
+        self.application.add_handler(CommandHandler("toggle_injuries", self._handle_toggle_injuries))
+        self.application.add_handler(CommandHandler("toggle_recalls", self._handle_toggle_recalls))
+        self.application.add_handler(CommandHandler("toggle_major_only", self._handle_toggle_major_only))
 
         # Message handler for regular text - only respond in private chats
         self.application.add_handler(
@@ -202,18 +209,29 @@ class TelegramBot:
         """Handle /help command."""
         help_message = (
             "⚾ <b>Seattle Mariners Gameday Bot</b>\n\n"
-            "I automatically notify you 5 minutes before each Mariners game starts!\n\n"
-            "<b>Commands:</b>\n"
+            "I automatically notify you 5 minutes before each Mariners game starts and "
+            "keep you updated on all Mariners transactions!\n\n"
+            "<b>Game Commands:</b>\n"
             "• /start - Start using the bot\n"
             "• /help - Show this help message\n"
             "• /status - Check your subscription status\n"
-            "• /subscribe - Subscribe to game notifications\n"
+            "• /subscribe - Subscribe to notifications\n"
             "• /unsubscribe - Unsubscribe from notifications\n"
             "• /nextgame or /next_game - Get info about the next upcoming game\n\n"
+            "<b>Transaction Commands:</b>\n"
+            "• /transactions - View recent Mariners transactions\n"
+            "• /transaction_settings - View/manage transaction notification preferences\n"
+            "• /toggle_trades - Toggle trade notifications\n"
+            "• /toggle_signings - Toggle free agent signing notifications\n"
+            "• /toggle_injuries - Toggle injury list notifications\n"
+            "• /toggle_recalls - Toggle player recall/option notifications\n"
+            "• /toggle_major_only - Toggle major league only filter\n\n"
             "<b>Features:</b>\n"
             "• 🔔 Automatic notifications 5 minutes before games\n"
+            "• 📰 Real-time Mariners transaction alerts\n"
             "• 🔗 Direct links to MLB Gameday\n"
             "• 🏟️ Game details (opponent, venue, time)\n"
+            "• ⚙️ Customizable transaction notifications\n"
             "• 🌍 Timezone-aware (Pacific Time)\n\n"
             "Go Mariners! 🌊"
         )
@@ -615,3 +633,146 @@ class TelegramBot:
 
         except Exception as e:
             logger.error("Failed to save notification job", job_id=job.job_id, error=str(e))
+
+    async def _handle_transactions(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /transactions command."""
+        if not update.effective_chat:
+            return
+
+        try:
+            from datetime import date, timedelta
+            from ..clients import MLBClient
+
+            # Get recent transactions (last 14 days)
+            start_date = date.today() - timedelta(days=14)
+            end_date = date.today()
+
+            async with MLBClient(self.settings) as mlb_client:
+                transactions = await mlb_client.get_mariners_transactions(
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+            if not transactions:
+                message = (
+                    "📰 <b>Recent Mariners Transactions</b>\n\n"
+                    "No transactions found in the last 14 days.\n\n"
+                    "🌊 Go Mariners!"
+                )
+            else:
+                # Sort by date (newest first) and limit to 10
+                transactions.sort(key=lambda t: t.transaction_date, reverse=True)
+                recent_transactions = transactions[:10]
+
+                from ..models import Transaction
+                message = Transaction.format_batch_notification_message(recent_transactions)
+
+            if update.message:
+                await update.message.reply_text(message, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+        except Exception as e:
+            logger.error("Error getting recent transactions", error=str(e))
+            if update.message:
+                await update.message.reply_text("Sorry, I couldn't get the recent transactions right now.")
+
+    async def _handle_transaction_settings(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /transaction_settings command."""
+        if not update.effective_chat:
+            return
+
+        try:
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+                preferences = await repository.get_user_transaction_preferences(update.effective_chat.id)
+
+            enabled_emoji = "✅"
+            disabled_emoji = "❌"
+
+            message = (
+                f"⚙️ <b>Transaction Notification Settings</b>\n\n"
+                f"<b>Current Preferences:</b>\n"
+                f"{enabled_emoji if preferences.trades else disabled_emoji} Trades\n"
+                f"{enabled_emoji if preferences.signings else disabled_emoji} Free Agent Signings\n"
+                f"{enabled_emoji if preferences.injuries else disabled_emoji} Injury List Moves\n"
+                f"{enabled_emoji if preferences.activations else disabled_emoji} Player Activations\n"
+                f"{enabled_emoji if preferences.recalls else disabled_emoji} Recalls & Options\n"
+                f"{enabled_emoji if preferences.releases else disabled_emoji} Player Releases\n"
+                f"{enabled_emoji if preferences.status_changes else disabled_emoji} Status Changes\n"
+                f"{enabled_emoji if preferences.other else disabled_emoji} Other Transactions\n\n"
+                f"<b>Filters:</b>\n"
+                f"{enabled_emoji if preferences.major_league_only else disabled_emoji} Major League Only\n\n"
+                f"<b>Quick Toggle Commands:</b>\n"
+                f"• /toggle_trades - Toggle trade notifications\n"
+                f"• /toggle_signings - Toggle signing notifications\n"
+                f"• /toggle_injuries - Toggle injury notifications\n"
+                f"• /toggle_recalls - Toggle recall/option notifications\n"
+                f"• /toggle_major_only - Toggle major league filter\n\n"
+                f"🌊 Go Mariners!"
+            )
+
+            if update.message:
+                await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+
+        except Exception as e:
+            logger.error("Error getting transaction settings", error=str(e))
+            if update.message:
+                await update.message.reply_text("Sorry, I couldn't get your transaction settings right now.")
+
+    async def _handle_toggle_trades(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_trades command."""
+        await self._toggle_preference(update, "trades", "Trade")
+
+    async def _handle_toggle_signings(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_signings command."""
+        await self._toggle_preference(update, "signings", "Free Agent Signing")
+
+    async def _handle_toggle_injuries(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_injuries command."""
+        await self._toggle_preference(update, "injuries", "Injury List")
+
+    async def _handle_toggle_recalls(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_recalls command."""
+        await self._toggle_preference(update, "recalls", "Recall/Option")
+
+    async def _handle_toggle_major_only(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_major_only command."""
+        await self._toggle_preference(update, "major_league_only", "Major League Only")
+
+    async def _toggle_preference(self, update: Update, preference_name: str, display_name: str) -> None:
+        """Toggle a specific transaction preference."""
+        if not update.effective_chat:
+            return
+
+        try:
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+                
+                # Get current preferences
+                preferences = await repository.get_user_transaction_preferences(update.effective_chat.id)
+                
+                # Toggle the preference
+                current_value = getattr(preferences, preference_name)
+                setattr(preferences, preference_name, not current_value)
+                
+                # Save updated preferences
+                await repository.save_user_transaction_preferences(preferences)
+                
+                # Send confirmation
+                new_value = not current_value
+                status = "enabled" if new_value else "disabled"
+                emoji = "✅" if new_value else "❌"
+                
+                message = (
+                    f"⚙️ <b>Settings Updated</b>\n\n"
+                    f"{emoji} <b>{display_name}</b> notifications are now <b>{status}</b>.\n\n"
+                    f"Use /transaction_settings to see all your preferences.\n\n"
+                    f"🌊 Go Mariners!"
+                )
+
+                if update.message:
+                    await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+
+        except Exception as e:
+            logger.error("Error toggling preference", preference=preference_name, error=str(e))
+            if update.message:
+                await update.message.reply_text(f"Sorry, I couldn't update your {display_name} preference right now.")
