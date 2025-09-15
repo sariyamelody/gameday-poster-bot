@@ -79,20 +79,20 @@ class TransactionRecord(Base):
     transaction_id = Column(Integer, primary_key=True, index=True)
     person_id = Column(Integer, nullable=False, index=True)
     person_name = Column(String, nullable=False)
-    
+
     from_team_id = Column(Integer, index=True)
     from_team_name = Column(String)
     to_team_id = Column(Integer, index=True)
     to_team_name = Column(String)
-    
+
     transaction_date = Column(DateTime(timezone=True), nullable=False, index=True)
     effective_date = Column(DateTime(timezone=True))
     resolution_date = Column(DateTime(timezone=True))
-    
+
     type_code = Column(String, nullable=False, index=True)
     type_description = Column(String, nullable=False)
     description = Column(Text, nullable=False)
-    
+
     notification_sent = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
 
@@ -108,7 +108,7 @@ class UserTransactionPreference(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     chat_id = Column(Integer, nullable=False, index=True)
-    
+
     # Transaction type preferences
     trades = Column(Boolean, default=True)
     signings = Column(Boolean, default=True)
@@ -119,10 +119,10 @@ class UserTransactionPreference(Base):
     releases = Column(Boolean, default=False)
     status_changes = Column(Boolean, default=False)
     other = Column(Boolean, default=False)
-    
+
     # Only major league transactions (vs minor league)
     major_league_only = Column(Boolean, default=True)
-    
+
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

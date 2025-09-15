@@ -1,8 +1,10 @@
 """Tests for transaction client functionality."""
 
-import pytest
 from datetime import date
-from unittest.mock import AsyncMock, patch
+from typing import Any
+from unittest.mock import Mock, patch
+
+import pytest
 
 from mariners_bot.clients.mlb_client import MLBClient
 from mariners_bot.config import get_settings
@@ -12,12 +14,12 @@ from mariners_bot.models.transaction import Transaction, TransactionType
 class TestMLBClientTransactions:
     """Test the MLB client transaction functionality."""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """Set up test fixtures."""
         self.settings = get_settings()
 
     @pytest.fixture
-    def mock_transaction_response(self):
+    def mock_transaction_response(self) -> dict[str, Any]:
         """Mock response for transaction API."""
         return {
             "transactions": [
@@ -60,12 +62,12 @@ class TestMLBClientTransactions:
         }
 
     @pytest.mark.asyncio
-    async def test_parse_transaction_data_complete(self, mock_transaction_response):
+    async def test_parse_transaction_data_complete(self, mock_transaction_response: dict[str, Any]) -> None:
         """Test parsing complete transaction data."""
         async with MLBClient(self.settings) as client:
             transaction_data = mock_transaction_response["transactions"][0]
             transaction = client._parse_transaction_data(transaction_data)
-            
+
             assert transaction is not None
             assert transaction.transaction_id == 123456
             assert transaction.person_id == 789
@@ -80,12 +82,12 @@ class TestMLBClientTransactions:
             assert transaction.transaction_type == TransactionType.SIGNED_FREE_AGENT
 
     @pytest.mark.asyncio
-    async def test_parse_transaction_data_trade(self, mock_transaction_response):
+    async def test_parse_transaction_data_trade(self, mock_transaction_response: dict[str, Any]) -> None:
         """Test parsing trade transaction data."""
         async with MLBClient(self.settings) as client:
             transaction_data = mock_transaction_response["transactions"][1]
             transaction = client._parse_transaction_data(transaction_data)
-            
+
             assert transaction is not None
             assert transaction.transaction_id == 123457
             assert transaction.person_name == "Trade Player"
@@ -96,7 +98,7 @@ class TestMLBClientTransactions:
             assert transaction.transaction_type == TransactionType.TRADE
 
     @pytest.mark.asyncio
-    async def test_parse_transaction_data_minimal(self):
+    async def test_parse_transaction_data_minimal(self) -> None:
         """Test parsing transaction with minimal data."""
         minimal_data = {
             "id": 999,
@@ -109,10 +111,10 @@ class TestMLBClientTransactions:
             "typeDesc": "Status Change",
             "description": "Status change for Minimal Player."
         }
-        
+
         async with MLBClient(self.settings) as client:
             transaction = client._parse_transaction_data(minimal_data)
-            
+
             assert transaction is not None
             assert transaction.transaction_id == 999
             assert transaction.person_name == "Minimal Player"
@@ -122,7 +124,7 @@ class TestMLBClientTransactions:
             assert transaction.resolution_date is None
 
     @pytest.mark.asyncio
-    async def test_parse_transaction_data_invalid(self):
+    async def test_parse_transaction_data_invalid(self) -> None:
         """Test parsing invalid transaction data."""
         invalid_data = {
             "id": 999,
@@ -132,34 +134,34 @@ class TestMLBClientTransactions:
             "typeDesc": "Status Change",
             "description": "Invalid transaction."
         }
-        
+
         async with MLBClient(self.settings) as client:
             transaction = client._parse_transaction_data(invalid_data)
-            
+
             assert transaction is None
 
     @pytest.mark.asyncio
-    async def test_parse_transactions_response(self, mock_transaction_response):
+    async def test_parse_transactions_response(self, mock_transaction_response: dict[str, Any]) -> None:
         """Test parsing full transactions response."""
         async with MLBClient(self.settings) as client:
             transactions = client._parse_transactions_response(mock_transaction_response)
-            
+
             assert len(transactions) == 2
             assert transactions[0].person_name == "Test Player"
             assert transactions[1].person_name == "Trade Player"
 
     @pytest.mark.asyncio
-    async def test_parse_transactions_response_empty(self):
+    async def test_parse_transactions_response_empty(self) -> None:
         """Test parsing empty transactions response."""
-        empty_response = {"transactions": []}
-        
+        empty_response: dict[str, list[dict[str, str]]] = {"transactions": []}
+
         async with MLBClient(self.settings) as client:
             transactions = client._parse_transactions_response(empty_response)
-            
+
             assert len(transactions) == 0
 
     @pytest.mark.asyncio
-    async def test_parse_transactions_response_with_invalid(self, mock_transaction_response):
+    async def test_parse_transactions_response_with_invalid(self, mock_transaction_response: dict[str, Any]) -> None:
         """Test parsing response with some invalid transactions."""
         # Add invalid transaction to response
         mock_transaction_response["transactions"].append({
@@ -167,27 +169,27 @@ class TestMLBClientTransactions:
             # Missing required fields
             "date": "2025-01-15"
         })
-        
+
         async with MLBClient(self.settings) as client:
             transactions = client._parse_transactions_response(mock_transaction_response)
-            
+
             # Should return only valid transactions
             assert len(transactions) == 2
             assert all(t.person_name in ["Test Player", "Trade Player"] for t in transactions)
 
     @pytest.mark.asyncio
     @patch('mariners_bot.clients.mlb_client.MLBClient._make_request')
-    async def test_get_team_transactions(self, mock_request, mock_transaction_response):
+    async def test_get_team_transactions(self, mock_request: Mock, mock_transaction_response: dict[str, Any]) -> None:
         """Test getting team transactions."""
         mock_request.return_value = mock_transaction_response
-        
+
         async with MLBClient(self.settings) as client:
             transactions = await client.get_team_transactions(
                 team_id=136,
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 1, 31)
             )
-            
+
             assert len(transactions) == 2
             mock_request.assert_called_once_with(
                 "transactions",
@@ -200,16 +202,16 @@ class TestMLBClientTransactions:
 
     @pytest.mark.asyncio
     @patch('mariners_bot.clients.mlb_client.MLBClient._make_request')
-    async def test_get_mariners_transactions(self, mock_request, mock_transaction_response):
+    async def test_get_mariners_transactions(self, mock_request: Mock, mock_transaction_response: dict[str, Any]) -> None:
         """Test getting Mariners transactions."""
         mock_request.return_value = mock_transaction_response
-        
+
         async with MLBClient(self.settings) as client:
             transactions = await client.get_mariners_transactions(
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 1, 31)
             )
-            
+
             assert len(transactions) == 2
             # Should use Mariners team ID (136)
             mock_request.assert_called_once_with(
@@ -223,13 +225,13 @@ class TestMLBClientTransactions:
 
     @pytest.mark.asyncio
     @patch('mariners_bot.clients.mlb_client.MLBClient._make_request')
-    async def test_get_transactions_no_dates(self, mock_request, mock_transaction_response):
+    async def test_get_transactions_no_dates(self, mock_request: Mock, mock_transaction_response: dict[str, Any]) -> None:
         """Test getting transactions without date parameters."""
         mock_request.return_value = mock_transaction_response
-        
+
         async with MLBClient(self.settings) as client:
             transactions = await client.get_team_transactions(team_id=136)
-            
+
             assert len(transactions) == 2
             mock_request.assert_called_once_with(
                 "transactions",
@@ -238,15 +240,15 @@ class TestMLBClientTransactions:
 
     @pytest.mark.asyncio
     @patch('mariners_bot.clients.mlb_client.MLBClient._make_request')
-    async def test_get_transactions_api_error(self, mock_request):
+    async def test_get_transactions_api_error(self, mock_request: Mock) -> None:
         """Test handling API errors."""
         mock_request.side_effect = Exception("API Error")
-        
+
         async with MLBClient(self.settings) as client:
             with pytest.raises(Exception, match="API Error"):
                 await client.get_team_transactions(team_id=136)
 
-    def test_transaction_properties(self):
+    def test_transaction_properties(self) -> None:
         """Test transaction property methods."""
         # Mariners acquisition
         acquisition = Transaction(
@@ -260,7 +262,7 @@ class TestMLBClientTransactions:
             type_description="Signed as Free Agent",
             description="Mariners signed player."
         )
-        
+
         assert acquisition.is_mariners_transaction is True
         assert acquisition.is_mariners_acquisition is True
         assert acquisition.is_mariners_departure is False
@@ -279,7 +281,7 @@ class TestMLBClientTransactions:
             type_description="Trade",
             description="Mariners traded player."
         )
-        
+
         assert departure.is_mariners_transaction is True
         assert departure.is_mariners_acquisition is False
         assert departure.is_mariners_departure is True
@@ -298,7 +300,7 @@ class TestMLBClientTransactions:
             type_description="Trade",
             description="Giants traded player."
         )
-        
+
         assert other.is_mariners_transaction is False
         assert other.is_mariners_acquisition is False
         assert other.is_mariners_departure is False

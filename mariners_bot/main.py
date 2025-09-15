@@ -17,7 +17,7 @@ from .database import Repository, get_database_session
 from .models import Game, Transaction
 from .observability import create_app_metrics, get_tracer, setup_telemetry
 from .scheduler import GameScheduler
-from .scheduler.transaction_scheduler import TransactionScheduler, TransactionNotificationBatcher
+from .scheduler.transaction_scheduler import TransactionNotificationBatcher, TransactionScheduler
 
 # Setup structured logging
 structlog.configure(
@@ -228,7 +228,7 @@ class MarinersBot:
                         existing = await self._is_transaction_existing(repository, transaction.transaction_id)
                         if not existing:
                             new_transactions.append(transaction)
-                        
+
                         await repository.save_transaction(transaction)
 
             if new_transactions:
@@ -274,8 +274,8 @@ class MarinersBot:
                 # Process individual user notifications with batching
                 for transaction in transactions:
                     users_preferences = await repository.get_users_for_transaction_notification(transaction)
-                    
-                    for user, preferences in users_preferences:
+
+                    for user, _preferences in users_preferences:
                         await self._handle_user_transaction_notification(user.chat_id, transaction, repository)
 
         except Exception as e:
@@ -289,10 +289,10 @@ class MarinersBot:
 
             # Sort transactions by priority and date
             transactions.sort(key=lambda t: (t.transaction_date, t.transaction_id))
-            
+
             # Split into optimal batches
             batches = TransactionNotificationBatcher.split_transactions_for_batching(transactions)
-            
+
             for batch in batches:
                 message = Transaction.format_batch_notification_message(batch)
                 if message:
@@ -300,7 +300,7 @@ class MarinersBot:
                         chat_id=self.settings.telegram_chat_id,
                         message=message
                     )
-                    
+
                     if success:
                         logger.info("Sent channel transaction notification", batch_size=len(batch))
                     else:
@@ -314,7 +314,7 @@ class MarinersBot:
         try:
             # Check if we should batch this notification
             should_batch = self.transaction_batcher.should_batch_notification(chat_id, transaction)
-            
+
             if should_batch:
                 # Add to batch
                 self.transaction_batcher.add_transaction_to_batch(chat_id, transaction)
@@ -323,34 +323,34 @@ class MarinersBot:
                 # Send immediately (possibly with any pending batch)
                 pending_batch = self.transaction_batcher.get_and_clear_batch(chat_id)
                 all_transactions = pending_batch + [transaction]
-                
+
                 message = Transaction.format_batch_notification_message(all_transactions)
                 if message:
                     success = await self.telegram_bot._send_message_with_retry(
                         chat_id=str(chat_id),
                         message=message
                     )
-                    
+
                     if success:
                         self.transaction_batcher.mark_notification_sent(chat_id)
                         # Mark all transactions as notified
                         for t in all_transactions:
                             await repository.mark_transaction_notified(t.transaction_id)
-                        
-                        logger.info("Sent user transaction notification", 
+
+                        logger.info("Sent user transaction notification",
                                   chat_id=chat_id, batch_size=len(all_transactions))
                     else:
                         logger.error("Failed to send user transaction notification", chat_id=chat_id)
 
         except Exception as e:
-            logger.error("Failed to handle user transaction notification", 
+            logger.error("Failed to handle user transaction notification",
                         chat_id=chat_id, transaction_id=transaction.transaction_id, error=str(e))
 
     async def _process_pending_transaction_batches(self) -> None:
         """Process any pending transaction batches that should be sent."""
         try:
             users_to_notify = self.transaction_batcher.get_users_with_pending_batches()
-            
+
             if not users_to_notify:
                 return
 
@@ -359,7 +359,7 @@ class MarinersBot:
 
                 for chat_id in users_to_notify:
                     pending_transactions = self.transaction_batcher.get_and_clear_batch(chat_id)
-                    
+
                     if pending_transactions:
                         message = Transaction.format_batch_notification_message(pending_transactions)
                         if message:
@@ -367,14 +367,14 @@ class MarinersBot:
                                 chat_id=str(chat_id),
                                 message=message
                             )
-                            
+
                             if success:
                                 self.transaction_batcher.mark_notification_sent(chat_id)
                                 # Mark all transactions as notified
                                 for transaction in pending_transactions:
                                     await repository.mark_transaction_notified(transaction.transaction_id)
-                                
-                                logger.info("Sent pending transaction batch", 
+
+                                logger.info("Sent pending transaction batch",
                                           chat_id=chat_id, batch_size=len(pending_transactions))
                             else:
                                 logger.error("Failed to send pending transaction batch", chat_id=chat_id)

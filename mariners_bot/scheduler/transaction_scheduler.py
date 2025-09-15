@@ -1,8 +1,7 @@
 """Transaction monitoring scheduler."""
 
 from collections.abc import Awaitable, Callable
-from datetime import date, datetime, timedelta
-from typing import Any
+from datetime import datetime
 
 import structlog
 from apscheduler.executors.asyncio import AsyncIOExecutor
@@ -124,30 +123,27 @@ class TransactionNotificationBatcher:
         self.pending_transactions: dict[int, list[Transaction]] = {}  # chat_id -> transactions
         self.last_notification_time: dict[int, datetime] = {}  # chat_id -> last notification time
 
-    def should_batch_notification(self, chat_id: int, transaction: Transaction) -> bool:
+    def should_batch_notification(self, chat_id: int, _transaction: Transaction) -> bool:
         """Check if a notification should be batched or sent immediately."""
         now = datetime.now()
-        
+
         # If this is the first transaction for this user, don't batch
         if chat_id not in self.last_notification_time:
             return False
-        
+
         # If the last notification was sent more than batch_window ago, don't batch
         last_notification = self.last_notification_time[chat_id]
         if (now - last_notification).total_seconds() > (self.batch_window_minutes * 60):
             return False
-        
+
         # Check if there are pending transactions for this user
-        if chat_id in self.pending_transactions and self.pending_transactions[chat_id]:
-            return True
-        
-        return False
+        return chat_id in self.pending_transactions and bool(self.pending_transactions[chat_id])
 
     def add_transaction_to_batch(self, chat_id: int, transaction: Transaction) -> None:
         """Add a transaction to the pending batch for a user."""
         if chat_id not in self.pending_transactions:
             self.pending_transactions[chat_id] = []
-        
+
         self.pending_transactions[chat_id].append(transaction)
         logger.debug("Added transaction to batch", chat_id=chat_id, transaction_id=transaction.transaction_id)
 
@@ -155,10 +151,10 @@ class TransactionNotificationBatcher:
         """Get and clear the pending batch for a user."""
         if chat_id not in self.pending_transactions:
             return []
-        
+
         transactions = self.pending_transactions[chat_id].copy()
         self.pending_transactions[chat_id] = []
-        
+
         logger.debug("Retrieved batch for user", chat_id=chat_id, count=len(transactions))
         return transactions
 
@@ -170,17 +166,11 @@ class TransactionNotificationBatcher:
         """Get list of chat_ids with pending transactions that should be sent."""
         now = datetime.now()
         users_to_notify = []
-        
+
         for chat_id, transactions in self.pending_transactions.items():
             if not transactions:
                 continue
-            
-            # Check if the oldest transaction in the batch is older than batch window
-            oldest_transaction = min(transactions, key=lambda t: t.transaction_date)
-            
-            # If the oldest transaction is more than batch_window old, send the batch
-            transaction_age_minutes = (now.date() - oldest_transaction.transaction_date).days * 24 * 60
-            
+
             # Also check if we haven't sent a notification recently
             if chat_id in self.last_notification_time:
                 time_since_last = (now - self.last_notification_time[chat_id]).total_seconds() / 60
@@ -189,24 +179,24 @@ class TransactionNotificationBatcher:
             else:
                 # First notification for this user
                 users_to_notify.append(chat_id)
-        
+
         return users_to_notify
 
     @staticmethod
     def group_transactions_by_priority(transactions: list[Transaction]) -> dict[str, list[Transaction]]:
         """Group transactions by priority for better batching."""
-        groups = {
+        groups: dict[str, list[Transaction]] = {
             "high_priority": [],  # Trades, major signings
             "medium_priority": [],  # Recalls, activations, injuries
             "low_priority": []  # Status changes, minor moves
         }
-        
+
         high_priority_types = {TransactionType.TRADE, TransactionType.SIGNED_FREE_AGENT}
         medium_priority_types = {
-            TransactionType.RECALLED, TransactionType.ACTIVATED, 
+            TransactionType.RECALLED, TransactionType.ACTIVATED,
             TransactionType.INJURED_LIST, TransactionType.OPTIONED
         }
-        
+
         for transaction in transactions:
             if transaction.transaction_type in high_priority_types:
                 groups["high_priority"].append(transaction)
@@ -214,7 +204,7 @@ class TransactionNotificationBatcher:
                 groups["medium_priority"].append(transaction)
             else:
                 groups["low_priority"].append(transaction)
-        
+
         return groups
 
     @staticmethod
@@ -222,10 +212,10 @@ class TransactionNotificationBatcher:
         """Check if transactions should be separated into multiple messages."""
         # Separate if there are both high-priority and low-priority transactions
         groups = TransactionNotificationBatcher.group_transactions_by_priority(transactions)
-        
+
         has_high = len(groups["high_priority"]) > 0
         has_low = len(groups["low_priority"]) > 0
-        
+
         # If we have both high and low priority, or more than 5 transactions total, separate
         return (has_high and has_low) or len(transactions) > 5
 
@@ -234,17 +224,17 @@ class TransactionNotificationBatcher:
         """Split transactions into optimal batches for notification."""
         if len(transactions) <= 1:
             return [transactions] if transactions else []
-        
+
         if not TransactionNotificationBatcher.should_separate_batch(transactions):
             return [transactions]
-        
+
         groups = TransactionNotificationBatcher.group_transactions_by_priority(transactions)
         batches = []
-        
+
         # Send high priority as separate batch
         if groups["high_priority"]:
             batches.append(groups["high_priority"])
-        
+
         # Combine medium and low priority
         medium_low = groups["medium_priority"] + groups["low_priority"]
         if medium_low:
@@ -254,5 +244,5 @@ class TransactionNotificationBatcher:
                 medium_low = medium_low[5:]
             if medium_low:
                 batches.append(medium_low)
-        
+
         return batches

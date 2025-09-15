@@ -7,10 +7,10 @@ from .user import User
 from .user_preferences import UserTransactionPreferences
 
 __all__ = [
-    "Game", 
-    "GameStatus", 
-    "NotificationJob", 
-    "NotificationStatus", 
+    "Game",
+    "GameStatus",
+    "NotificationJob",
+    "NotificationStatus",
     "Transaction",
     "TransactionType",
     "User",

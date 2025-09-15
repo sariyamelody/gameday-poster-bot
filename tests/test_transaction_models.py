@@ -1,6 +1,5 @@
 """Tests for transaction models."""
 
-import pytest
 from datetime import date
 
 from mariners_bot.models.transaction import Transaction, TransactionType
@@ -10,7 +9,7 @@ from mariners_bot.models.user_preferences import UserTransactionPreferences
 class TestTransaction:
     """Test the Transaction model."""
 
-    def test_transaction_creation(self):
+    def test_transaction_creation(self) -> None:
         """Test creating a transaction."""
         transaction = Transaction(
             transaction_id=123,
@@ -23,7 +22,7 @@ class TestTransaction:
             type_description="Signed as Free Agent",
             description="Seattle Mariners signed Test Player as a free agent."
         )
-        
+
         assert transaction.transaction_id == 123
         assert transaction.person_name == "Test Player"
         assert transaction.transaction_type == TransactionType.SIGNED_FREE_AGENT
@@ -31,7 +30,7 @@ class TestTransaction:
         assert transaction.is_mariners_acquisition is True
         assert transaction.is_mariners_departure is False
 
-    def test_mariners_departure(self):
+    def test_mariners_departure(self) -> None:
         """Test transaction where player leaves Mariners."""
         transaction = Transaction(
             transaction_id=124,
@@ -46,12 +45,12 @@ class TestTransaction:
             type_description="Trade",
             description="Seattle Mariners traded Departing Player to San Francisco Giants."
         )
-        
+
         assert transaction.is_mariners_transaction is True
         assert transaction.is_mariners_acquisition is False
         assert transaction.is_mariners_departure is True
 
-    def test_non_mariners_transaction(self):
+    def test_non_mariners_transaction(self) -> None:
         """Test transaction not involving Mariners."""
         transaction = Transaction(
             transaction_id=125,
@@ -66,35 +65,35 @@ class TestTransaction:
             type_description="Trade",
             description="San Francisco Giants traded Other Player to Los Angeles Dodgers."
         )
-        
+
         assert transaction.is_mariners_transaction is False
         assert transaction.is_mariners_acquisition is False
         assert transaction.is_mariners_departure is False
 
-    def test_transaction_emojis(self):
+    def test_transaction_emojis(self) -> None:
         """Test transaction emoji assignment."""
         trade = Transaction(
-            transaction_id=1, person_id=1, person_name="Player", 
-            transaction_date=date.today(), type_code="TR", 
+            transaction_id=1, person_id=1, person_name="Player",
+            transaction_date=date.today(), type_code="TR",
             type_description="Trade", description="Test"
         )
         assert trade.emoji == "🔄"
 
         signing = Transaction(
-            transaction_id=2, person_id=2, person_name="Player", 
-            transaction_date=date.today(), type_code="SFA", 
+            transaction_id=2, person_id=2, person_name="Player",
+            transaction_date=date.today(), type_code="SFA",
             type_description="Signed as Free Agent", description="Test"
         )
         assert signing.emoji == "✍️"
 
         injury = Transaction(
-            transaction_id=3, person_id=3, person_name="Player", 
-            transaction_date=date.today(), type_code="IL", 
+            transaction_id=3, person_id=3, person_name="Player",
+            transaction_date=date.today(), type_code="IL",
             type_description="Injured List", description="Test"
         )
         assert injury.emoji == "🏥"
 
-    def test_single_transaction_notification_message(self):
+    def test_single_transaction_notification_message(self) -> None:
         """Test formatting a single transaction notification."""
         transaction = Transaction(
             transaction_id=123,
@@ -108,16 +107,16 @@ class TestTransaction:
             type_description="Signed as Free Agent",
             description="Seattle Mariners signed free agent LHP Josh Fleming to a minor league contract."
         )
-        
+
         message = transaction.format_notification_message()
-        
+
         assert "FREE AGENT SIGNING" in message
         assert "Josh Fleming" in message
         assert "January 15, 2025" in message
         assert "⏰ <b>Effective:</b> January 16, 2025" in message
         assert "Go Mariners!" in message
 
-    def test_batch_notification_message_single(self):
+    def test_batch_notification_message_single(self) -> None:
         """Test batch formatting with a single transaction."""
         transaction = Transaction(
             transaction_id=123,
@@ -130,14 +129,14 @@ class TestTransaction:
             type_description="Signed as Free Agent",
             description="Test signing."
         )
-        
+
         message = Transaction.format_batch_notification_message([transaction])
-        
+
         # Single transaction should use individual format
         assert "FREE AGENT SIGNING" in message
         assert "MARINERS TRANSACTION UPDATE" not in message
 
-    def test_batch_notification_message_multiple(self):
+    def test_batch_notification_message_multiple(self) -> None:
         """Test batch formatting with multiple transactions."""
         transactions = [
             Transaction(
@@ -165,9 +164,9 @@ class TestTransaction:
                 description="Traded Player Two."
             )
         ]
-        
+
         message = Transaction.format_batch_notification_message(transactions)
-        
+
         assert "MARINERS TRANSACTION UPDATE" in message
         assert "Signed as Free Agent • Trade" in message
         assert "January 15, 2025" in message
@@ -175,7 +174,7 @@ class TestTransaction:
         assert "Player Two" in message
         assert "1." in message and "2." in message
 
-    def test_batch_notification_date_range(self):
+    def test_batch_notification_date_range(self) -> None:
         """Test batch formatting with transactions across multiple dates."""
         transactions = [
             Transaction(
@@ -201,12 +200,12 @@ class TestTransaction:
                 description="Signed Player Two."
             )
         ]
-        
+
         message = Transaction.format_batch_notification_message(transactions)
-        
+
         assert "January 15 - January 17, 2025" in message
 
-    def test_empty_batch_message(self):
+    def test_empty_batch_message(self) -> None:
         """Test batch formatting with empty list."""
         message = Transaction.format_batch_notification_message([])
         assert message == ""
@@ -215,10 +214,10 @@ class TestTransaction:
 class TestUserTransactionPreferences:
     """Test the UserTransactionPreferences model."""
 
-    def test_default_preferences(self):
+    def test_default_preferences(self) -> None:
         """Test default preference values."""
         prefs = UserTransactionPreferences(chat_id=12345)
-        
+
         assert prefs.chat_id == 12345
         assert prefs.trades is True
         assert prefs.signings is True
@@ -231,7 +230,7 @@ class TestUserTransactionPreferences:
         assert prefs.other is False
         assert prefs.major_league_only is True
 
-    def test_should_notify_for_transaction_types(self):
+    def test_should_notify_for_transaction_types(self) -> None:
         """Test notification logic for different transaction types."""
         prefs = UserTransactionPreferences(
             chat_id=12345,
@@ -240,55 +239,55 @@ class TestUserTransactionPreferences:
             injuries=False,
             releases=False
         )
-        
+
         # Should notify for enabled types
         assert prefs.should_notify_for_transaction(TransactionType.TRADE, "Major league trade") is True
         assert prefs.should_notify_for_transaction(TransactionType.SIGNED_FREE_AGENT, "Major league signing") is True
-        
+
         # Should not notify for disabled types
         assert prefs.should_notify_for_transaction(TransactionType.INJURED_LIST, "Injured list move") is False
         assert prefs.should_notify_for_transaction(TransactionType.RELEASED, "Player released") is False
 
-    def test_major_league_only_filter(self):
+    def test_major_league_only_filter(self) -> None:
         """Test major league only filtering."""
         prefs = UserTransactionPreferences(
             chat_id=12345,
             signings=True,
             major_league_only=True
         )
-        
+
         # Should notify for major league transactions
         assert prefs.should_notify_for_transaction(
-            TransactionType.SIGNED_FREE_AGENT, 
+            TransactionType.SIGNED_FREE_AGENT,
             "Seattle Mariners signed major league contract"
         ) is True
-        
+
         # Should not notify for minor league transactions
         assert prefs.should_notify_for_transaction(
-            TransactionType.SIGNED_FREE_AGENT, 
+            TransactionType.SIGNED_FREE_AGENT,
             "Seattle Mariners signed minor league contract"
         ) is False
-        
+
         assert prefs.should_notify_for_transaction(
-            TransactionType.SIGNED_FREE_AGENT, 
+            TransactionType.SIGNED_FREE_AGENT,
             "Seattle Mariners signed to Triple-A contract"
         ) is False
 
-    def test_major_league_only_disabled(self):
+    def test_major_league_only_disabled(self) -> None:
         """Test with major league filter disabled."""
         prefs = UserTransactionPreferences(
             chat_id=12345,
             signings=True,
             major_league_only=False
         )
-        
+
         # Should notify for both major and minor league transactions
         assert prefs.should_notify_for_transaction(
-            TransactionType.SIGNED_FREE_AGENT, 
+            TransactionType.SIGNED_FREE_AGENT,
             "Seattle Mariners signed minor league contract"
         ) is True
 
-    def test_preferences_summary(self):
+    def test_preferences_summary(self) -> None:
         """Test preferences summary generation."""
         prefs = UserTransactionPreferences(
             chat_id=12345,
@@ -297,14 +296,14 @@ class TestUserTransactionPreferences:
             injuries=False,
             major_league_only=True
         )
-        
+
         summary = prefs.summary
         assert "Trades" in summary
         assert "Signings" in summary
         assert "Major League only" in summary
         assert "Injuries" not in summary
 
-    def test_all_disabled_summary(self):
+    def test_all_disabled_summary(self) -> None:
         """Test summary when no notifications are enabled."""
         prefs = UserTransactionPreferences(
             chat_id=12345,
@@ -318,11 +317,11 @@ class TestUserTransactionPreferences:
             status_changes=False,
             other=False
         )
-        
+
         summary = prefs.summary
         assert "No transaction notifications enabled" in summary
 
-    def test_transaction_type_mapping(self):
+    def test_transaction_type_mapping(self) -> None:
         """Test mapping of various transaction types to preferences."""
         prefs = UserTransactionPreferences(
             chat_id=12345,
@@ -330,12 +329,12 @@ class TestUserTransactionPreferences:
             status_changes=False,
             other=False
         )
-        
+
         # Selected type should map to recalls
         assert prefs.should_notify_for_transaction(TransactionType.SELECTED, "Player selected") is True
-        
+
         # Designated should map to status_changes (disabled)
         assert prefs.should_notify_for_transaction(TransactionType.DESIGNATED, "Player designated") is False
-        
+
         # Other should map to other (disabled)
         assert prefs.should_notify_for_transaction(TransactionType.OTHER, "Unknown transaction") is False

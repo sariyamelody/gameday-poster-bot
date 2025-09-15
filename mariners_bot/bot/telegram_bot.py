@@ -641,6 +641,7 @@ class TelegramBot:
 
         try:
             from datetime import date, timedelta
+
             from ..clients import MLBClient
 
             # Get recent transactions (last 14 days)
@@ -746,22 +747,22 @@ class TelegramBot:
         try:
             async with self.db_session.get_session() as session:
                 repository = Repository(session)
-                
+
                 # Get current preferences
                 preferences = await repository.get_user_transaction_preferences(update.effective_chat.id)
-                
+
                 # Toggle the preference
                 current_value = getattr(preferences, preference_name)
                 setattr(preferences, preference_name, not current_value)
-                
+
                 # Save updated preferences
                 await repository.save_user_transaction_preferences(preferences)
-                
+
                 # Send confirmation
                 new_value = not current_value
                 status = "enabled" if new_value else "disabled"
                 emoji = "✅" if new_value else "❌"
-                
+
                 message = (
                     f"⚙️ <b>Settings Updated</b>\n\n"
                     f"{emoji} <b>{display_name}</b> notifications are now <b>{status}</b>.\n\n"

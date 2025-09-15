@@ -7,7 +7,13 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Game, NotificationJob, Transaction, User, UserTransactionPreferences
-from .models import GameRecord, NotificationJobRecord, TransactionRecord, UserRecord, UserTransactionPreference
+from .models import (
+    GameRecord,
+    NotificationJobRecord,
+    TransactionRecord,
+    UserRecord,
+    UserTransactionPreference,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -489,13 +495,13 @@ class Repository:
             user_preferences = []
             for user_record, pref_record in result.all():
                 user = self._user_record_to_model(user_record)
-                
+
                 if pref_record:
                     preferences = self._user_preferences_record_to_model(pref_record)
                 else:
                     # Use default preferences if none exist
                     preferences = UserTransactionPreferences(chat_id=user.chat_id)
-                
+
                 # Check if user should be notified for this transaction
                 if preferences.should_notify_for_transaction(transaction.transaction_type, transaction.description):
                     user_preferences.append((user, preferences))
