@@ -157,6 +157,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("toggle_signings", self._handle_toggle_signings))
         self.application.add_handler(CommandHandler("toggle_injuries", self._handle_toggle_injuries))
         self.application.add_handler(CommandHandler("toggle_recalls", self._handle_toggle_recalls))
+        self.application.add_handler(CommandHandler("toggle_releases", self._handle_toggle_releases))
+        self.application.add_handler(CommandHandler("toggle_status_changes", self._handle_toggle_status_changes))
+        self.application.add_handler(CommandHandler("toggle_other", self._handle_toggle_other))
         self.application.add_handler(CommandHandler("toggle_major_only", self._handle_toggle_major_only))
 
         # Message handler for regular text - only respond in private chats
@@ -225,6 +228,9 @@ class TelegramBot:
             "• /toggle_signings - Toggle free agent signing notifications\n"
             "• /toggle_injuries - Toggle injury list notifications\n"
             "• /toggle_recalls - Toggle player recall/option notifications\n"
+            "• /toggle_releases - Toggle player release notifications\n"
+            "• /toggle_status_changes - Toggle status change notifications\n"
+            "• /toggle_other - Toggle other transaction notifications\n"
             "• /toggle_major_only - Toggle major league only filter\n\n"
             "<b>Features:</b>\n"
             "• 🔔 Automatic notifications 5 minutes before games\n"
@@ -707,6 +713,9 @@ class TelegramBot:
                 f"• /toggle_signings - Toggle signing notifications\n"
                 f"• /toggle_injuries - Toggle injury notifications\n"
                 f"• /toggle_recalls - Toggle recall/option notifications\n"
+                f"• /toggle_releases - Toggle release notifications\n"
+                f"• /toggle_status_changes - Toggle status change notifications\n"
+                f"• /toggle_other - Toggle other transaction notifications\n"
                 f"• /toggle_major_only - Toggle major league filter\n\n"
                 f"🌊 Go Mariners!"
             )
@@ -734,6 +743,18 @@ class TelegramBot:
     async def _handle_toggle_recalls(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /toggle_recalls command."""
         await self._toggle_preference(update, "recalls", "Recall/Option")
+
+    async def _handle_toggle_releases(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_releases command."""
+        await self._toggle_preference(update, "releases", "Player Release")
+
+    async def _handle_toggle_status_changes(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_status_changes command."""
+        await self._toggle_preference(update, "status_changes", "Status Change")
+
+    async def _handle_toggle_other(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_other command."""
+        await self._toggle_preference(update, "other", "Other Transaction")
 
     async def _handle_toggle_major_only(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /toggle_major_only command."""
