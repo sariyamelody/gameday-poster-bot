@@ -253,10 +253,8 @@ class MarinersBot:
     async def _is_transaction_existing(self, repository: Repository, transaction_id: int) -> bool:
         """Check if a transaction already exists in the database."""
         try:
-            # Try to get existing transactions that haven't been notified
-            new_transactions = await repository.get_new_transactions()
-            existing_ids = {t.transaction_id for t in new_transactions}
-            return transaction_id in existing_ids
+            # Check if transaction exists in database (regardless of notification status)
+            return await repository.transaction_exists(transaction_id)
         except Exception:
             # If we can't check, assume it's new to be safe
             return False
@@ -381,6 +379,7 @@ class MarinersBot:
 
         except Exception as e:
             logger.error("Failed to process pending transaction batches", error=str(e))
+
 
 
 # Global bot instance

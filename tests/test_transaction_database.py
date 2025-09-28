@@ -40,8 +40,8 @@ def sample_transaction() -> Transaction:
         person_name="Test Player",
         to_team_id=136,
         to_team_name="Seattle Mariners",
-        transaction_date=date(2025, 1, 15),
-        effective_date=date(2025, 1, 16),
+        transaction_date=date.today(),
+        effective_date=date.today(),
         type_code="SFA",
         type_description="Signed as Free Agent",
         description="Seattle Mariners signed free agent Test Player."

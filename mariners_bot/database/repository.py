@@ -1,6 +1,6 @@
 """Repository layer for database operations."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy import and_, select, update
@@ -319,6 +319,17 @@ class Repository:
         )
 
     # Transaction operations
+    async def transaction_exists(self, transaction_id: int) -> bool:
+        """Check if a transaction exists in the database."""
+        try:
+            result = await self.session.execute(
+                select(TransactionRecord).where(TransactionRecord.transaction_id == transaction_id)
+            )
+            return result.scalar_one_or_none() is not None
+        except Exception as e:
+            logger.error("Failed to check transaction existence", transaction_id=transaction_id, error=str(e))
+            raise
+
     async def save_transaction(self, transaction: Transaction) -> None:
         """Save or update a transaction record."""
         try:
@@ -376,11 +387,14 @@ class Repository:
     async def get_new_transactions(self) -> list[Transaction]:
         """Get transactions that haven't had notifications sent yet."""
         try:
+            # Only get unnotified transactions from the last 3 days to prevent spam
+            cutoff_date = (datetime.now() - timedelta(days=3)).date()
+            
             result = await self.session.execute(
                 select(TransactionRecord).where(
                     and_(
                         TransactionRecord.notification_sent == False,  # noqa: E712
-                        TransactionRecord.transaction_date >= datetime(2025, 1, 1).date()  # Only recent transactions
+                        TransactionRecord.transaction_date >= cutoff_date  # Only very recent transactions
                     )
                 ).order_by(TransactionRecord.transaction_date.desc())
             )
