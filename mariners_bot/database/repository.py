@@ -389,7 +389,7 @@ class Repository:
         try:
             # Only get unnotified transactions from the last 3 days to prevent spam
             cutoff_date = (datetime.now() - timedelta(days=3)).date()
-            
+
             result = await self.session.execute(
                 select(TransactionRecord).where(
                     and_(
