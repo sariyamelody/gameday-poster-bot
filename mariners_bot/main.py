@@ -136,15 +136,37 @@ class MarinersBot:
         logger.info("Starting schedule sync")
 
         try:
-            # Fetch schedule for the current season
             async with MLBClient(self.settings) as mlb_client:
-                # Get remaining games this season
-                games = await mlb_client.get_team_schedule(
-                    start_date=datetime.now(),
-                    end_date=datetime(datetime.now().year, 12, 31)
+                current_year = datetime.now().year
+                current_date = datetime.now()
+                
+                all_games = []
+                
+                # Get remaining games from current season (including postseason)
+                current_season_games = await mlb_client.get_team_schedule(
+                    start_date=current_date,
+                    end_date=datetime(current_year, 12, 31),
+                    season=current_year
                 )
+                all_games.extend(current_season_games)
+                logger.info("Fetched current season games", 
+                           season=current_year, 
+                           count=len(current_season_games))
+                
+                # If we're in the off-season (after September), also get next season's games
+                if current_date.month >= 10:  # October or later
+                    next_year = current_year + 1
+                    next_season_games = await mlb_client.get_team_schedule(
+                        start_date=datetime(next_year, 1, 1),
+                        end_date=datetime(next_year, 12, 31),
+                        season=next_year
+                    )
+                    all_games.extend(next_season_games)
+                    logger.info("Fetched next season games", 
+                               season=next_year, 
+                               count=len(next_season_games))
 
-            if not games:
+            if not all_games:
                 logger.warning("No games found in schedule sync")
                 return
 
@@ -153,7 +175,7 @@ class MarinersBot:
             async with self.db_session.get_session() as session:
                 repository = Repository(session)
 
-                for game in games:
+                for game in all_games:
                     if game.is_mariners_game:
                         await repository.save_game(game)
                         saved_count += 1
@@ -166,7 +188,7 @@ class MarinersBot:
 
             logger.info(
                 "Schedule sync completed",
-                total_games=len(games),
+                total_games=len(all_games),
                 saved_games=saved_count,
                 scheduled_notifications=scheduled_count
             )

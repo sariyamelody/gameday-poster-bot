@@ -16,6 +16,18 @@ class GameStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class GameType(str, Enum):
+    """Game type enumeration."""
+    
+    REGULAR = "R"          # Regular season
+    SPRING = "S"           # Spring training
+    POSTSEASON = "P"       # Postseason (generic)
+    DIVISION_SERIES = "D"  # Division Series
+    LEAGUE_CHAMPIONSHIP = "L"  # League Championship Series
+    CHAMPIONSHIP = "F"     # Championship Series
+    WORLD_SERIES = "W"     # World Series
+
+
 class Game(BaseModel):
     """Represents a Seattle Mariners game."""
 
@@ -25,6 +37,7 @@ class Game(BaseModel):
     away_team: str = Field(..., description="Away team name")
     venue: str = Field(..., description="Stadium name")
     status: GameStatus = Field(default=GameStatus.SCHEDULED, description="Game status")
+    game_type: GameType = Field(default=GameType.REGULAR, description="Game type (regular, postseason, etc.)")
     notification_sent: bool = Field(default=False, description="Whether notification was sent")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="Record creation time")
     updated_at: datetime | None = Field(default=None, description="Last update time")
@@ -68,9 +81,18 @@ class Game(BaseModel):
         """String representation of the game."""
         home_indicator = "🏠" if self.is_mariners_home else ""
         away_indicator = "✈️" if self.is_mariners_away else ""
+        
+        # Add game type emoji/indicator
+        type_indicator = ""
+        if self.game_type in [GameType.POSTSEASON, GameType.DIVISION_SERIES, GameType.LEAGUE_CHAMPIONSHIP, GameType.CHAMPIONSHIP]:
+            type_indicator = "🏆 "
+        elif self.game_type == GameType.WORLD_SERIES:
+            type_indicator = "🌟 "
+        elif self.game_type == GameType.SPRING:
+            type_indicator = "🌸 "
 
         return (
-            f"{self.away_team} {away_indicator} @ {self.home_team} {home_indicator} "
+            f"{type_indicator}{self.away_team} {away_indicator} @ {self.home_team} {home_indicator} "
             f"({self.date.strftime('%Y-%m-%d %H:%M UTC')})"
         )
 

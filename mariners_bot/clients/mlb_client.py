@@ -8,7 +8,7 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config import Settings
-from ..models import Game, GameStatus, Transaction
+from ..models import Game, GameStatus, GameType, Transaction
 
 logger = structlog.get_logger(__name__)
 
@@ -68,33 +68,91 @@ class MLBClient:
         self,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
-        season: int | None = None
+        season: int | None = None,
+        game_types: list[str] | None = None
     ) -> list[Game]:
-        """Get the Mariners schedule for a date range."""
-        params: dict[str, Any] = {
-            "teamId": self.team_id,
-            "sportId": 1,  # MLB
-        }
+        """Get the Mariners schedule for a date range.
+        
+        Args:
+            start_date: Start date for schedule
+            end_date: End date for schedule  
+            season: Season year
+            game_types: List of game types to include. Options:
+                       'R' = Regular season, 'S' = Spring training, 
+                       'P' = Postseason, 'D' = Division Series,
+                       'L' = League Championship, 'F' = Championship Series,
+                       'W' = World Series
+                       Defaults to all types
+        """
+        if game_types is None:
+            game_types = ['R', 'S', 'P', 'D', 'L', 'F', 'W']  # Include all game types by default
+            
+        all_games = []
+        
+        # Fetch games for each game type separately since API doesn't support multiple gameTypes
+        for game_type in game_types:
+            try:
+                if game_type in ['P', 'D', 'L', 'F', 'W']:  # All postseason game types
+                    # For postseason games, we need to fetch all games and filter for Mariners
+                    # because the API may not return postseason games when filtering by teamId
+                    params: dict[str, Any] = {
+                        "sportId": 1,  # MLB
+                        "gameType": game_type,
+                    }
+                else:
+                    # For regular season and spring training, use teamId filter
+                    params: dict[str, Any] = {
+                        "teamId": self.team_id,
+                        "sportId": 1,  # MLB
+                        "gameType": game_type,
+                    }
 
-        if season:
-            params["season"] = season
-        else:
-            # Default to current year
-            params["season"] = datetime.now().year
+                if season:
+                    params["season"] = season
+                else:
+                    # Default to current year
+                    params["season"] = datetime.now().year
 
-        if start_date:
-            params["startDate"] = start_date.strftime("%Y-%m-%d")
+                if start_date:
+                    params["startDate"] = start_date.strftime("%Y-%m-%d")
 
-        if end_date:
-            params["endDate"] = end_date.strftime("%Y-%m-%d")
+                if end_date:
+                    params["endDate"] = end_date.strftime("%Y-%m-%d")
 
-        try:
-            data = await self._make_request("schedule", params=params)
-            return self._parse_schedule_response(data)
-
-        except Exception as e:
-            logger.error("Failed to fetch team schedule", error=str(e))
-            raise
+                logger.debug("Fetching schedule", game_type=game_type, params=params)
+                data = await self._make_request("schedule", params=params)
+                games = self._parse_schedule_response(data, game_type)
+                
+                # For postseason games, we need to filter for Mariners games since we fetched all teams
+                if game_type in ['P', 'D', 'L', 'F', 'W']:
+                    mariners_games = [game for game in games if game.is_mariners_game]
+                    all_games.extend(mariners_games)
+                    logger.debug("Fetched and filtered postseason games", 
+                               game_type=game_type, 
+                               total_games=len(games),
+                               mariners_games=len(mariners_games))
+                else:
+                    all_games.extend(games)
+                    logger.debug("Fetched games", game_type=game_type, count=len(games))
+                
+            except Exception as e:
+                logger.warning("Failed to fetch schedule for game type", 
+                             game_type=game_type, error=str(e))
+                # Continue with other game types even if one fails
+                continue
+        
+        # Remove duplicates based on game_id and sort by date
+        unique_games = {}
+        for game in all_games:
+            unique_games[game.game_id] = game
+            
+        sorted_games = sorted(unique_games.values(), key=lambda g: g.date)
+        
+        logger.info("Fetched complete schedule", 
+                   total_games=len(sorted_games), 
+                   game_types=game_types)
+        
+        return sorted_games
 
     async def get_game_details(self, game_id: str) -> Game | None:
         """Get detailed information for a specific game."""
@@ -105,7 +163,9 @@ class MLBClient:
 
         try:
             data = await self._make_request("schedule", params=params)
-            games = self._parse_schedule_response(data)
+            # For game details, we don't know the game type, so we'll try to infer it
+            # from the response or default to regular season
+            games = self._parse_schedule_response(data, "R")  # Default to regular season
             return games[0] if games else None
 
         except Exception as e:
@@ -165,14 +225,14 @@ class MLBClient:
             logger.warning("Failed to parse probable pitchers", error=str(e))
             return None
 
-    def _parse_schedule_response(self, data: dict[str, Any]) -> list[Game]:
+    def _parse_schedule_response(self, data: dict[str, Any], game_type: str = "R") -> list[Game]:
         """Parse the MLB API schedule response into Game objects."""
         games = []
 
         for date_entry in data.get("dates", []):
             for game_data in date_entry.get("games", []):
                 try:
-                    game = self._parse_game_data(game_data)
+                    game = self._parse_game_data(game_data, game_type)
                     if game and game.is_mariners_game:
                         games.append(game)
                 except Exception as e:
@@ -183,10 +243,10 @@ class MLBClient:
                     )
                     continue
 
-        logger.info("Parsed schedule", total_games=len(games))
+        logger.info("Parsed schedule", total_games=len(games), game_type=game_type)
         return games
 
-    def _parse_game_data(self, game_data: dict[str, Any]) -> Game | None:
+    def _parse_game_data(self, game_data: dict[str, Any], game_type: str = "R") -> Game | None:
         """Parse individual game data from MLB API response."""
         try:
             # Extract basic game information
@@ -216,7 +276,8 @@ class MLBClient:
                 home_team=home_team,
                 away_team=away_team,
                 venue=venue,
-                status=status
+                status=status,
+                game_type=game_type  # Pass the game type from the API request
             )
 
         except (KeyError, ValueError, TypeError) as e:
