@@ -1,0 +1,31 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check .
+        language: system
+        pass_filenames: false
+
+      - id: mypy-type-check
+        name: mypy type check
+        entry: uv run mypy .
+        language: system
+        pass_filenames: false
+
+      - id: pytest-unit-tests
+        name: pytest unit tests (with coverage)
+        entry: bash -c
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        args:
+          - TELEGRAM_BOT_TOKEN=dummy_token_for_testing uv run pytest --cov=. --cov-report=html
+
+      - id: bandit-security-scan
+        name: "bandit security scan (severity: high)"
+        entry: uv run bandit -r mariners_bot tests --severity-level high
+        language: system
+        pass_filenames: false
+
+
