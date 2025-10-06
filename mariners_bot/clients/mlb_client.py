@@ -72,13 +72,13 @@ class MLBClient:
         game_types: list[str] | None = None
     ) -> list[Game]:
         """Get the Mariners schedule for a date range.
-        
+
         Args:
             start_date: Start date for schedule
-            end_date: End date for schedule  
+            end_date: End date for schedule
             season: Season year
             game_types: List of game types to include. Options:
-                       'R' = Regular season, 'S' = Spring training, 
+                       'R' = Regular season, 'S' = Spring training,
                        'P' = Postseason, 'D' = Division Series,
                        'L' = League Championship, 'F' = Championship Series,
                        'W' = World Series
@@ -86,22 +86,22 @@ class MLBClient:
         """
         if game_types is None:
             game_types = ['R', 'S', 'P', 'D', 'L', 'F', 'W']  # Include all game types by default
-            
+
         all_games = []
-        
+
         # Fetch games for each game type separately since API doesn't support multiple gameTypes
         for game_type in game_types:
             try:
                 if game_type in ['P', 'D', 'L', 'F', 'W']:  # All postseason game types
                     # For postseason games, we need to fetch all games and filter for Mariners
                     # because the API may not return postseason games when filtering by teamId
-                    params: dict[str, Any] = {
+                    params = {
                         "sportId": 1,  # MLB
                         "gameType": game_type,
                     }
                 else:
                     # For regular season and spring training, use teamId filter
-                    params: dict[str, Any] = {
+                    params = {
                         "teamId": self.team_id,
                         "sportId": 1,  # MLB
                         "gameType": game_type,
@@ -122,36 +122,36 @@ class MLBClient:
                 logger.debug("Fetching schedule", game_type=game_type, params=params)
                 data = await self._make_request("schedule", params=params)
                 games = self._parse_schedule_response(data, game_type)
-                
+
                 # For postseason games, we need to filter for Mariners games since we fetched all teams
                 if game_type in ['P', 'D', 'L', 'F', 'W']:
                     mariners_games = [game for game in games if game.is_mariners_game]
                     all_games.extend(mariners_games)
-                    logger.debug("Fetched and filtered postseason games", 
-                               game_type=game_type, 
+                    logger.debug("Fetched and filtered postseason games",
+                               game_type=game_type,
                                total_games=len(games),
                                mariners_games=len(mariners_games))
                 else:
                     all_games.extend(games)
                     logger.debug("Fetched games", game_type=game_type, count=len(games))
-                
+
             except Exception as e:
-                logger.warning("Failed to fetch schedule for game type", 
+                logger.warning("Failed to fetch schedule for game type",
                              game_type=game_type, error=str(e))
                 # Continue with other game types even if one fails
                 continue
-        
+
         # Remove duplicates based on game_id and sort by date
         unique_games = {}
         for game in all_games:
             unique_games[game.game_id] = game
-            
+
         sorted_games = sorted(unique_games.values(), key=lambda g: g.date)
-        
-        logger.info("Fetched complete schedule", 
-                   total_games=len(sorted_games), 
+
+        logger.info("Fetched complete schedule",
+                   total_games=len(sorted_games),
                    game_types=game_types)
-        
+
         return sorted_games
 
     async def get_game_details(self, game_id: str) -> Game | None:
@@ -277,7 +277,7 @@ class MLBClient:
                 away_team=away_team,
                 venue=venue,
                 status=status,
-                game_type=game_type  # Pass the game type from the API request
+                game_type=self._parse_game_type(game_type)  # Convert string to GameType enum
             )
 
         except (KeyError, ValueError, TypeError) as e:
@@ -296,6 +296,20 @@ class MLBClient:
         }
 
         return status_mapping.get(status_code, GameStatus.SCHEDULED)
+
+    def _parse_game_type(self, game_type: str) -> GameType:
+        """Parse MLB game type string to our GameType enum."""
+        type_mapping = {
+            "R": GameType.REGULAR,
+            "S": GameType.SPRING,
+            "P": GameType.POSTSEASON,
+            "D": GameType.DIVISION_SERIES,
+            "L": GameType.LEAGUE_CHAMPIONSHIP,
+            "F": GameType.CHAMPIONSHIP,
+            "W": GameType.WORLD_SERIES,
+        }
+
+        return type_mapping.get(game_type, GameType.REGULAR)
 
     async def get_team_transactions(
         self,

@@ -18,7 +18,7 @@ class GameStatus(str, Enum):
 
 class GameType(str, Enum):
     """Game type enumeration."""
-    
+
     REGULAR = "R"          # Regular season
     SPRING = "S"           # Spring training
     POSTSEASON = "P"       # Postseason (generic)
@@ -81,7 +81,7 @@ class Game(BaseModel):
         """String representation of the game."""
         home_indicator = "🏠" if self.is_mariners_home else ""
         away_indicator = "✈️" if self.is_mariners_away else ""
-        
+
         # Add game type emoji/indicator
         type_indicator = ""
         if self.game_type in [GameType.POSTSEASON, GameType.DIVISION_SERIES, GameType.LEAGUE_CHAMPIONSHIP, GameType.CHAMPIONSHIP]:
