@@ -1,6 +1,6 @@
 services:
   mariners-bot:
-    build: .
+    image: ghcr.io/sariyamelody/gameday-poster-bot:latest
     restart: unless-stopped
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
