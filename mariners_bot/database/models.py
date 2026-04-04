@@ -24,6 +24,7 @@ class GameRecord(Base):
     status = Column(String, default="scheduled")
     game_type = Column(String, default="R", index=True)  # R=Regular, S=Spring, P=Postseason, W=World Series
     notification_sent = Column(Boolean, default=False, index=True)
+    final_score_sent = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

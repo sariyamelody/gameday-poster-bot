@@ -63,6 +63,7 @@ class MarinersBot:
         # Setup scheduler callbacks
         self.scheduler.set_notification_callback(self.telegram_bot.send_notification)
         self.scheduler.set_schedule_sync_callback(self._sync_schedule)
+        self.scheduler.set_final_score_callback(self._check_final_scores)
         self.transaction_scheduler.set_transaction_sync_callback(self._sync_transactions)
 
         logger.info("Mariners bot initialized", version="0.1.0")
@@ -271,6 +272,78 @@ class MarinersBot:
         except Exception as e:
             logger.error("Failed to sync transactions", error=str(e))
             raise
+
+    async def _check_final_scores(self) -> None:
+        """Check for completed games and send final score notifications."""
+        try:
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+                games = await repository.get_games_needing_final_score()
+
+            if not games:
+                return
+
+            logger.debug("Checking final scores", game_count=len(games))
+
+            async with MLBClient(self.settings) as mlb_client:
+                for game in games:
+                    try:
+                        score_data = await mlb_client.get_game_score(game.game_id)
+
+                        if not score_data or not score_data["is_final"]:
+                            continue
+
+                        message = self._create_final_score_message(game, score_data)
+
+                        # Send to channel if configured
+                        if self.settings.telegram_chat_id:
+                            await self.telegram_bot._send_message_with_retry(
+                                chat_id=self.settings.telegram_chat_id,
+                                message=message
+                            )
+
+                        # Send to all subscribed users
+                        async with self.db_session.get_session() as session:
+                            repository = Repository(session)
+                            users = await repository.get_subscribed_users()
+                            await repository.mark_game_final_score_sent(game.game_id)
+                            await session.commit()
+
+                        for user in users:
+                            if str(user.chat_id) != self.settings.telegram_chat_id:
+                                await self.telegram_bot._send_message_with_retry(
+                                    chat_id=str(user.chat_id),
+                                    message=message
+                                )
+
+                        logger.info("Sent final score notification", game_id=game.game_id)
+
+                    except Exception as e:
+                        logger.error("Failed to process final score for game",
+                                     game_id=game.game_id, error=str(e))
+
+        except Exception as e:
+            logger.error("Failed to check final scores", error=str(e))
+
+    def _create_final_score_message(self, game: "Game", score_data: dict[str, object]) -> str:
+        """Create a final score message with spoiler tags."""
+        is_home = game.is_mariners_home
+        mariners_score = score_data["home_score"] if is_home else score_data["away_score"]
+        opponent_score = score_data["away_score"] if is_home else score_data["home_score"]
+        mariners_won = score_data["home_winner"] if is_home else score_data["away_winner"]
+
+        result_emoji = "✅" if mariners_won else "❌"
+        result_text = "WIN" if mariners_won else "loss"
+
+        innings = score_data.get("innings")
+        innings_note = f" ({innings} innings)" if innings and isinstance(innings, int) and innings != 9 else ""
+
+        return (
+            f"⚾ <b>Final Score — Mariners vs {game.opponent}</b>\n\n"
+            f"<tg-spoiler>{result_emoji} Mariners {result_text}{innings_note}: "
+            f"{mariners_score}–{opponent_score}</tg-spoiler>\n\n"
+            f"📊 <a href=\"{game.baseball_savant_url}\">Full Game on Baseball Savant</a>"
+        )
 
     async def _is_transaction_existing(self, repository: Repository, transaction_id: int) -> bool:
         """Check if a transaction already exists in the database."""
