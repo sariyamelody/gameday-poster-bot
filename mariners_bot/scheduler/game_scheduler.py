@@ -10,6 +10,7 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from ..config import Settings
 from ..models import Game, NotificationJob, NotificationStatus
@@ -19,6 +20,7 @@ logger = structlog.get_logger(__name__)
 # Global callback storage for scheduler jobs
 _schedule_sync_callback: Callable[[], Awaitable[None]] | None = None
 _notification_callback: Callable[[NotificationJob], Awaitable[bool]] | None = None
+_final_score_callback: Callable[[], Awaitable[None]] | None = None
 
 
 async def _sync_schedule_wrapper() -> None:
@@ -31,6 +33,18 @@ async def _sync_schedule_wrapper() -> None:
 
     except Exception as e:
         logger.error("Error in schedule sync callback", error=str(e))
+
+
+async def _check_final_scores_wrapper() -> None:
+    """Wrapper for final score check with error handling."""
+    try:
+        if _final_score_callback:
+            await _final_score_callback()
+        else:
+            logger.error("No final score callback set")
+
+    except Exception as e:
+        logger.error("Error in final score callback", error=str(e))
 
 
 async def _notification_wrapper(notification_job: NotificationJob) -> None:
@@ -94,6 +108,9 @@ class GameScheduler:
             # Schedule daily sync job
             self._schedule_daily_sync()
 
+            # Schedule final score poller
+            self._schedule_final_score_poller()
+
             logger.info("Game scheduler started")
 
         except Exception as e:
@@ -123,6 +140,12 @@ class GameScheduler:
         global _schedule_sync_callback
         _schedule_sync_callback = callback
         logger.debug("Schedule sync callback set")
+
+    def set_final_score_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
+        """Set the callback function for checking final scores."""
+        global _final_score_callback
+        _final_score_callback = callback
+        logger.debug("Final score callback set")
 
     async def schedule_game_notifications(self, games: list[Game]) -> int:
         """Schedule notification jobs for a list of games."""
@@ -287,6 +310,18 @@ class GameScheduler:
         )
 
         return message
+
+    def _schedule_final_score_poller(self) -> None:
+        """Schedule periodic final score checking every 20 minutes."""
+        self.scheduler.add_job(
+            _check_final_scores_wrapper,
+            trigger=IntervalTrigger(seconds=30, timezone=self.timezone),
+            id='final_score_poller',
+            replace_existing=True,
+            max_instances=1
+        )
+
+        logger.info("Scheduled final score poller", interval_seconds=30)
 
     def _schedule_daily_sync(self) -> None:
         """Schedule the daily schedule sync job."""

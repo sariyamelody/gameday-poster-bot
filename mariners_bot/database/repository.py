@@ -43,6 +43,7 @@ class Repository:
                 existing_game.venue = game.venue  # type: ignore[assignment]
                 existing_game.status = game.status.value  # type: ignore[assignment]
                 existing_game.notification_sent = game.notification_sent  # type: ignore[assignment]
+                existing_game.final_score_sent = game.final_score_sent  # type: ignore[assignment]
                 existing_game.updated_at = datetime.now(UTC)  # type: ignore[assignment]
 
                 logger.debug("Updated existing game", game_id=game.game_id)
@@ -56,6 +57,7 @@ class Repository:
                     venue=game.venue,
                     status=game.status.value,
                     notification_sent=game.notification_sent,
+                    final_score_sent=game.final_score_sent,
                 )
 
                 self.session.add(game_record)
@@ -135,6 +137,48 @@ class Repository:
 
         except Exception as e:
             logger.error("Failed to get upcoming games", error=str(e))
+            raise
+
+    async def get_games_needing_final_score(self) -> list[Game]:
+        """Get games notified in the last 12 hours that haven't had a final score sent."""
+        try:
+            cutoff_time = datetime.now(UTC) - timedelta(hours=12)
+
+            result = await self.session.execute(
+                select(GameRecord)
+                .where(
+                    and_(
+                        GameRecord.notification_sent == True,  # noqa: E712
+                        GameRecord.final_score_sent == False,  # noqa: E712
+                        GameRecord.date >= cutoff_time,
+                    )
+                )
+                .order_by(GameRecord.date)
+            )
+
+            games = []
+            for record in result.scalars():
+                games.append(self._game_record_to_model(record))
+
+            return games
+
+        except Exception as e:
+            logger.error("Failed to get games needing final score", error=str(e))
+            raise
+
+    async def mark_game_final_score_sent(self, game_id: str) -> None:
+        """Mark a game as having had its final score sent."""
+        try:
+            await self.session.execute(
+                update(GameRecord)
+                .where(GameRecord.game_id == game_id)
+                .values(final_score_sent=True, updated_at=datetime.now(UTC))
+            )
+
+            logger.debug("Marked game final score as sent", game_id=game_id)
+
+        except Exception as e:
+            logger.error("Failed to mark game final score as sent", game_id=game_id, error=str(e))
             raise
 
     async def mark_game_notified(self, game_id: str) -> None:
@@ -284,6 +328,7 @@ class Repository:
             venue=record.venue or "",  # type: ignore[arg-type]
             status=GameStatus(record.status),
             notification_sent=record.notification_sent,  # type: ignore[arg-type]
+            final_score_sent=record.final_score_sent or False,  # type: ignore[arg-type]
             created_at=record.created_at,  # type: ignore[arg-type]
             updated_at=record.updated_at,  # type: ignore[arg-type]
         )

@@ -39,6 +39,7 @@ class Game(BaseModel):
     status: GameStatus = Field(default=GameStatus.SCHEDULED, description="Game status")
     game_type: GameType = Field(default=GameType.REGULAR, description="Game type (regular, postseason, etc.)")
     notification_sent: bool = Field(default=False, description="Whether notification was sent")
+    final_score_sent: bool = Field(default=False, description="Whether final score notification was sent")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="Record creation time")
     updated_at: datetime | None = Field(default=None, description="Last update time")
 

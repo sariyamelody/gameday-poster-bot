@@ -15,7 +15,7 @@ from .clients import MLBClient
 from .config import get_settings
 from .database import Repository, get_database_session
 from .models import Game, Transaction
-from .observability import create_app_metrics, get_tracer, setup_telemetry
+from .observability import setup_telemetry, shutdown_telemetry
 from .scheduler import GameScheduler
 from .scheduler.transaction_scheduler import TransactionNotificationBatcher, TransactionScheduler
 
@@ -49,8 +49,6 @@ class MarinersBot:
 
         # Initialize OpenTelemetry observability
         setup_telemetry(self.settings)
-        self.tracer = get_tracer("mariners-bot.main")
-        self.metrics = create_app_metrics()
 
         self.db_session = get_database_session(self.settings)
         self.scheduler = GameScheduler(self.settings)
@@ -63,17 +61,69 @@ class MarinersBot:
         # Setup scheduler callbacks
         self.scheduler.set_notification_callback(self.telegram_bot.send_notification)
         self.scheduler.set_schedule_sync_callback(self._sync_schedule)
+        self.scheduler.set_final_score_callback(self._check_final_scores)
         self.transaction_scheduler.set_transaction_sync_callback(self._sync_transactions)
 
         logger.info("Mariners bot initialized", version="0.1.0")
+
+    def _run_migrations(self) -> None:
+        """Run Alembic migrations to bring the database schema up to date.
+
+        Handles three cases:
+        - Fresh install: create_tables() creates all tables, then we stamp at
+          head (no migrations to run).
+        - Existing DB with no migration history: compare_metadata detects any
+          schema drift; if current we stamp head, otherwise we stamp at the
+          parent of head so upgrade applies only the missing migration(s).
+        - Existing DB with migration history: run upgrade head normally.
+        """
+        from sqlalchemy import inspect
+
+        from alembic import command
+        from alembic.autogenerate import compare_metadata
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+        from mariners_bot.database.models import Base
+
+        logger.info("Running database migrations")
+        alembic_cfg = Config("alembic.ini")
+
+        with self.db_session.sync_engine.connect() as conn:
+            if "alembic_version" not in inspect(conn).get_table_names():
+                if "games" not in inspect(conn).get_table_names():
+                    # Fresh install — schema already current from create_tables()
+                    command.stamp(alembic_cfg, "head")
+                else:
+                    # Existing install without migration history — detect schema state
+                    mc = MigrationContext.configure(conn, opts={"compare_type": False})
+                    diff = compare_metadata(mc, Base.metadata)
+                    if not diff:
+                        # Schema already matches models — nothing to migrate
+                        command.stamp(alembic_cfg, "head")
+                    else:
+                        # Schema is behind — stamp at the parent of head so
+                        # upgrade head applies the missing migration(s)
+                        script = ScriptDirectory.from_config(alembic_cfg)
+                        current_head = script.get_current_head()
+                        if current_head is None:
+                            raise RuntimeError("No Alembic head revision found")
+                        head_rev = script.get_revision(current_head)
+                        command.stamp(alembic_cfg, str(head_rev.down_revision))
+
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Database migrations complete")
 
     async def start(self) -> None:
         """Start the bot application."""
         try:
             logger.info("Starting Mariners bot")
 
-            # Initialize database
+            # Initialize base schema (safe on existing databases)
             await self.db_session.create_tables()
+
+            # Run migrations for incremental schema changes
+            self._run_migrations()
 
             # Start health check server first
             await self.health_server.start()
@@ -125,6 +175,9 @@ class MarinersBot:
 
             # Close database connections
             await self.db_session.close()
+
+            # Flush and shut down telemetry last so any shutdown-path spans are exported
+            shutdown_telemetry()
 
             logger.info("Mariners bot stopped successfully")
 
@@ -271,6 +324,78 @@ class MarinersBot:
         except Exception as e:
             logger.error("Failed to sync transactions", error=str(e))
             raise
+
+    async def _check_final_scores(self) -> None:
+        """Check for completed games and send final score notifications."""
+        try:
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+                games = await repository.get_games_needing_final_score()
+
+            if not games:
+                return
+
+            logger.debug("Checking final scores", game_count=len(games))
+
+            async with MLBClient(self.settings) as mlb_client:
+                for game in games:
+                    try:
+                        score_data = await mlb_client.get_game_score(game.game_id)
+
+                        if not score_data or not score_data["is_final"]:
+                            continue
+
+                        message = self._create_final_score_message(game, score_data)
+
+                        # Send to channel if configured
+                        if self.settings.telegram_chat_id:
+                            await self.telegram_bot._send_message_with_retry(
+                                chat_id=self.settings.telegram_chat_id,
+                                message=message
+                            )
+
+                        # Send to all subscribed users
+                        async with self.db_session.get_session() as session:
+                            repository = Repository(session)
+                            users = await repository.get_subscribed_users()
+                            await repository.mark_game_final_score_sent(game.game_id)
+                            await session.commit()
+
+                        for user in users:
+                            if str(user.chat_id) != self.settings.telegram_chat_id:
+                                await self.telegram_bot._send_message_with_retry(
+                                    chat_id=str(user.chat_id),
+                                    message=message
+                                )
+
+                        logger.info("Sent final score notification", game_id=game.game_id)
+
+                    except Exception as e:
+                        logger.error("Failed to process final score for game",
+                                     game_id=game.game_id, error=str(e))
+
+        except Exception as e:
+            logger.error("Failed to check final scores", error=str(e))
+
+    def _create_final_score_message(self, game: "Game", score_data: dict[str, object]) -> str:
+        """Create a final score message with spoiler tags."""
+        is_home = game.is_mariners_home
+        mariners_score = score_data["home_score"] if is_home else score_data["away_score"]
+        opponent_score = score_data["away_score"] if is_home else score_data["home_score"]
+        mariners_won = score_data["home_winner"] if is_home else score_data["away_winner"]
+
+        result_emoji = "✅" if mariners_won else "❌"
+        result_text = "WIN" if mariners_won else "loss"
+
+        innings = score_data.get("innings")
+        innings_note = f" ({innings} innings)" if innings and isinstance(innings, int) and innings != 9 else ""
+
+        return (
+            f"⚾ <b>Final Score — Mariners vs {game.opponent}</b>\n\n"
+            f"<tg-spoiler>{result_emoji} Mariners {result_text}{innings_note}: "
+            f"{mariners_score}–{opponent_score}</tg-spoiler>\n\n"
+            f"📊 <a href=\"{game.baseball_savant_url}\">Full Game on Baseball Savant</a>"
+        )
 
     async def _is_transaction_existing(self, repository: Repository, transaction_id: int) -> bool:
         """Check if a transaction already exists in the database."""
@@ -444,7 +569,7 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-@click.option("--traces-stdout", is_flag=True, help="Enable OpenTelemetry traces to stdout")
+@click.option("--traces-stdout", is_flag=True, help="Enable OpenTelemetry traces to stdout (alias for --trace-exporter=console)")
 @click.option("--trace-exporter", type=click.Choice(['none', 'console', 'otlp']),
               default='none', help="OpenTelemetry trace exporter to use")
 def start(debug: bool, traces_stdout: bool, trace_exporter: str) -> None:
@@ -458,8 +583,8 @@ def start(debug: bool, traces_stdout: bool, trace_exporter: str) -> None:
 
     # Override OTEL settings if CLI options provided
     if traces_stdout:
-        os.environ["OTEL_TRACES_TO_STDOUT"] = "true"
-    if trace_exporter != 'none':
+        os.environ["OTEL_TRACES_EXPORTER"] = "console"
+    elif trace_exporter != 'none':
         os.environ["OTEL_TRACES_EXPORTER"] = trace_exporter
 
     # Use uvloop for better async performance

@@ -27,11 +27,9 @@ class Settings(BaseSettings):
     # Observability Configuration
     log_level: str = Field(default="INFO")
     otel_service_name: str = Field(default="mariners-bot")
-    otel_traces_to_stdout: bool = Field(default=False)
     otel_traces_exporter: str = Field(default="none")  # none, console, otlp
-    otel_exporter_otlp_protocol: str = Field(default="http/protobuf")
-    otel_exporter_otlp_endpoint: str = Field(default="https://api.honeycomb.io")
-    otel_exporter_otlp_headers: str = Field(default="")
+    otel_exporter_otlp_endpoint: str = Field(default="")  # e.g. https://api.honeycomb.io
+    otel_exporter_otlp_headers: str = Field(default="")   # key=value,key2=value2
 
     # Health Check Configuration
     health_check_port: int = Field(default=8000)

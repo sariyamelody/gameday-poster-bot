@@ -172,6 +172,63 @@ class MLBClient:
             logger.error("Failed to fetch game details", game_id=game_id, error=str(e))
             return None
 
+    async def get_game_score(self, game_id: str) -> dict[str, Any] | None:
+        """Get the current score and status for a specific game."""
+        params = {
+            "gamePk": game_id,
+            "hydrate": "linescore"
+        }
+
+        try:
+            data = await self._make_request("schedule", params=params)
+
+            for date_entry in data.get("dates", []):
+                for game_data in date_entry.get("games", []):
+                    if str(game_data.get("gamePk")) == game_id:
+                        return self._parse_game_score(game_data)
+
+            logger.warning("Game not found in score data", game_id=game_id)
+            return None
+
+        except Exception as e:
+            logger.error("Failed to fetch game score", game_id=game_id, error=str(e))
+            return None
+
+    def _parse_game_score(self, game_data: dict[str, Any]) -> dict[str, Any] | None:
+        """Parse score information from game data."""
+        try:
+            status_code = game_data.get("status", {}).get("abstractGameCode", "")
+            is_final = status_code == "F"
+
+            teams = game_data.get("teams", {})
+            home = teams.get("home", {})
+            away = teams.get("away", {})
+
+            home_score = home.get("score")
+            away_score = away.get("score")
+            home_name = home.get("team", {}).get("name", "")
+            away_name = away.get("team", {}).get("name", "")
+            home_winner = home.get("isWinner", False)
+            away_winner = away.get("isWinner", False)
+
+            linescore = game_data.get("linescore", {})
+            innings = linescore.get("currentInning")
+
+            return {
+                "is_final": is_final,
+                "home_team": home_name,
+                "away_team": away_name,
+                "home_score": home_score,
+                "away_score": away_score,
+                "home_winner": home_winner,
+                "away_winner": away_winner,
+                "innings": innings,
+            }
+
+        except Exception as e:
+            logger.warning("Failed to parse game score", error=str(e))
+            return None
+
     async def get_probable_pitchers(self, game_id: str) -> dict[str, str] | None:
         """Get probable pitchers for a specific game."""
         params = {
