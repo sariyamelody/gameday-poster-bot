@@ -72,38 +72,44 @@ class MarinersBot:
         Handles three cases:
         - Fresh install: create_tables() creates all tables, then we stamp at
           head (no migrations to run).
-        - Existing DB with no migration history: stamp at the pre-0002 revision
-          so that only new migrations run.
+        - Existing DB with no migration history: compare_metadata detects any
+          schema drift; if current we stamp head, otherwise we stamp at the
+          parent of head so upgrade applies only the missing migration(s).
         - Existing DB with migration history: run upgrade head normally.
         """
         from sqlalchemy import inspect
 
         from alembic import command
+        from alembic.autogenerate import compare_metadata
         from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+        from mariners_bot.database.models import Base
 
         logger.info("Running database migrations")
         alembic_cfg = Config("alembic.ini")
 
         with self.db_session.sync_engine.connect() as conn:
-            inspector = inspect(conn)
-            table_names = inspector.get_table_names()
-            has_alembic = "alembic_version" in table_names
-            has_games = "games" in table_names
-
-            if not has_alembic:
-                if not has_games:
-                    # Fresh install — create_tables() just ran, stamp at current head
-                    command.stamp(alembic_cfg, "01d69363e610")
+            if "alembic_version" not in inspect(conn).get_table_names():
+                if "games" not in inspect(conn).get_table_names():
+                    # Fresh install — schema already current from create_tables()
+                    command.stamp(alembic_cfg, "head")
                 else:
-                    # Existing DB that has never had migrations run on it.
-                    # Stamp at the revision just before ours so upgrade head
-                    # applies only the new migration(s).
-                    cols = [c["name"] for c in inspector.get_columns("games")]
-                    if "final_score_sent" in cols:
-                        # Already has the column somehow — stamp at full head
-                        command.stamp(alembic_cfg, "01d69363e610")
+                    # Existing install without migration history — detect schema state
+                    mc = MigrationContext.configure(conn, opts={"compare_type": False})
+                    diff = compare_metadata(mc, Base.metadata)
+                    if not diff:
+                        # Schema already matches models — nothing to migrate
+                        command.stamp(alembic_cfg, "head")
                     else:
-                        command.stamp(alembic_cfg, "2abb3c9cd816")
+                        # Schema is behind — stamp at the parent of head so
+                        # upgrade head applies the missing migration(s)
+                        script = ScriptDirectory.from_config(alembic_cfg)
+                        current_head = script.get_current_head()
+                        if current_head is None:
+                            raise RuntimeError("No Alembic head revision found")
+                        head_rev = script.get_revision(current_head)
+                        command.stamp(alembic_cfg, str(head_rev.down_revision))
 
         command.upgrade(alembic_cfg, "head")
         logger.info("Database migrations complete")
