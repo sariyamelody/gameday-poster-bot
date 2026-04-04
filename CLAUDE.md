@@ -5,13 +5,15 @@ Telegram bot that posts Seattle Mariners game notifications: a pre-game alert 5 
 ## Dev commands
 
 ```bash
-uv run mariners-bot start          # Run the bot
-uv run mariners-bot init-db        # First-time DB setup
-uv run pytest tests/               # Run tests
-uv run ruff check --fix .          # Lint (auto-fix)
-uv run mypy mariners_bot/          # Type check
-uv run mariners-bot sync-schedule  # Manually fetch schedule
+uv run mariners-bot start                        # Run the bot
+uv run pytest tests/                             # Run tests
+uv run ruff check --fix .                        # Lint (auto-fix)
+uv run mypy mariners_bot/                        # Type check
+uv run mariners-bot sync-schedule                # Manually fetch schedule
+uv run mariners-bot migrate -m "describe change" # Generate a migration after editing models
 ```
+
+Migrations are auto-generated — after changing a model, run `migrate` and Alembic diffs the schema and writes the file. Review the output in `alembic/versions/` before committing. The bot runs `alembic upgrade head` automatically on startup.
 
 ## Architecture
 

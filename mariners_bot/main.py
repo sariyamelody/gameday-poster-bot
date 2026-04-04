@@ -66,13 +66,58 @@ class MarinersBot:
 
         logger.info("Mariners bot initialized", version="0.1.0")
 
+    def _run_migrations(self) -> None:
+        """Run Alembic migrations to bring the database schema up to date.
+
+        Handles three cases:
+        - Fresh install: create_tables() creates all tables, then we stamp at
+          head (no migrations to run).
+        - Existing DB with no migration history: stamp at the pre-0002 revision
+          so that only new migrations run.
+        - Existing DB with migration history: run upgrade head normally.
+        """
+        from sqlalchemy import inspect
+
+        from alembic import command
+        from alembic.config import Config
+
+        logger.info("Running database migrations")
+        alembic_cfg = Config("alembic.ini")
+
+        with self.db_session.sync_engine.connect() as conn:
+            inspector = inspect(conn)
+            table_names = inspector.get_table_names()
+            has_alembic = "alembic_version" in table_names
+            has_games = "games" in table_names
+
+            if not has_alembic:
+                if not has_games:
+                    # Fresh install — create_tables() just ran, stamp at current head
+                    command.stamp(alembic_cfg, "01d69363e610")
+                else:
+                    # Existing DB that has never had migrations run on it.
+                    # Stamp at the revision just before ours so upgrade head
+                    # applies only the new migration(s).
+                    cols = [c["name"] for c in inspector.get_columns("games")]
+                    if "final_score_sent" in cols:
+                        # Already has the column somehow — stamp at full head
+                        command.stamp(alembic_cfg, "01d69363e610")
+                    else:
+                        command.stamp(alembic_cfg, "2abb3c9cd816")
+
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Database migrations complete")
+
     async def start(self) -> None:
         """Start the bot application."""
         try:
             logger.info("Starting Mariners bot")
 
-            # Initialize database
+            # Initialize base schema (safe on existing databases)
             await self.db_session.create_tables()
+
+            # Run migrations for incremental schema changes
+            self._run_migrations()
 
             # Start health check server first
             await self.health_server.start()
