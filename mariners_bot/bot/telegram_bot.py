@@ -347,6 +347,8 @@ class TelegramBot:
         """Handle /next_game command."""
         from datetime import datetime, timedelta
 
+        from opentelemetry import trace
+
         from ..observability import get_tracer
         tracer = get_tracer("mariners-bot.telegram")
 
@@ -519,11 +521,10 @@ class TelegramBot:
 
                 if update.message:
                     await update.message.reply_text(message, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-                    span.set_attribute("response.sent", True)
 
             except Exception as e:
-                span.set_attribute("error", str(e))
-                span.set_attribute("response.sent", False)
+                span.record_exception(e)
+                span.set_status(trace.StatusCode.ERROR, str(e))
                 logger.error("Error getting next game", error=str(e))
                 if update.message:
                     await update.message.reply_text("Sorry, I couldn't get the next game info right now.")

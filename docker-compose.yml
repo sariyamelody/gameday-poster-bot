@@ -10,14 +10,11 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG=${DEBUG:-false}
       - ENVIRONMENT=${ENVIRONMENT:-production}
-      # OpenTelemetry Configuration
+      # OpenTelemetry Configuration (set OTEL_TRACES_EXPORTER=otlp to enable)
       - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-mariners-bot}
-      - OTEL_TRACES_TO_STDOUT=${OTEL_TRACES_TO_STDOUT:-false}
       - OTEL_TRACES_EXPORTER=${OTEL_TRACES_EXPORTER:-none}
-      # Standard OpenTelemetry variables (Honeycomb, etc.)
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS}
-      - OTEL_EXPORTER_OTLP_PROTOCOL=${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
       # Additional scheduler configuration
       - SCHEDULER_TIMEZONE=${SCHEDULER_TIMEZONE:-America/Los_Angeles}
       - NOTIFICATION_ADVANCE_MINUTES=${NOTIFICATION_ADVANCE_MINUTES:-5}

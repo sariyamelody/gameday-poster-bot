@@ -15,7 +15,7 @@ from .clients import MLBClient
 from .config import get_settings
 from .database import Repository, get_database_session
 from .models import Game, Transaction
-from .observability import create_app_metrics, get_tracer, setup_telemetry
+from .observability import setup_telemetry, shutdown_telemetry
 from .scheduler import GameScheduler
 from .scheduler.transaction_scheduler import TransactionNotificationBatcher, TransactionScheduler
 
@@ -49,8 +49,6 @@ class MarinersBot:
 
         # Initialize OpenTelemetry observability
         setup_telemetry(self.settings)
-        self.tracer = get_tracer("mariners-bot.main")
-        self.metrics = create_app_metrics()
 
         self.db_session = get_database_session(self.settings)
         self.scheduler = GameScheduler(self.settings)
@@ -126,6 +124,9 @@ class MarinersBot:
 
             # Close database connections
             await self.db_session.close()
+
+            # Flush and shut down telemetry last so any shutdown-path spans are exported
+            shutdown_telemetry()
 
             logger.info("Mariners bot stopped successfully")
 
@@ -517,7 +518,7 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-@click.option("--traces-stdout", is_flag=True, help="Enable OpenTelemetry traces to stdout")
+@click.option("--traces-stdout", is_flag=True, help="Enable OpenTelemetry traces to stdout (alias for --trace-exporter=console)")
 @click.option("--trace-exporter", type=click.Choice(['none', 'console', 'otlp']),
               default='none', help="OpenTelemetry trace exporter to use")
 def start(debug: bool, traces_stdout: bool, trace_exporter: str) -> None:
@@ -531,8 +532,8 @@ def start(debug: bool, traces_stdout: bool, trace_exporter: str) -> None:
 
     # Override OTEL settings if CLI options provided
     if traces_stdout:
-        os.environ["OTEL_TRACES_TO_STDOUT"] = "true"
-    if trace_exporter != 'none':
+        os.environ["OTEL_TRACES_EXPORTER"] = "console"
+    elif trace_exporter != 'none':
         os.environ["OTEL_TRACES_EXPORTER"] = trace_exporter
 
     # Use uvloop for better async performance
