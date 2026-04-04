@@ -1,7 +1,7 @@
 """SQLAlchemy database models."""
 
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.sql import func
 
@@ -131,3 +131,60 @@ class UserTransactionPreference(Base):
     def __repr__(self) -> str:
         """String representation of the user preference record."""
         return f"<UserTransactionPreference(chat_id={self.chat_id})>"
+
+
+class PlayByPlaySessionRecord(Base):
+    """Tracks an active play-by-play session for a live game."""
+
+    __tablename__ = "playbyplay_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    game_id = Column(String, nullable=False, unique=True, index=True)
+    game_pk = Column(Integer, nullable=False)
+    active = Column(Boolean, default=True, index=True)
+    last_play_index = Column(Integer, default=-1)
+    started_at = Column(DateTime(timezone=True), default=func.now())
+    finished_at = Column(DateTime(timezone=True))
+    last_poll_at = Column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        return f"<PlayByPlaySessionRecord(game_id={self.game_id}, active={self.active})>"
+
+
+class InningPostRecord(Base):
+    """A single inning-half post in the play-by-play channel."""
+
+    __tablename__ = "inning_posts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    game_id = Column(String, nullable=False, index=True)
+    inning = Column(Integer, nullable=False)
+    half = Column(String, nullable=False)           # 'top' or 'bottom'
+    channel_message_id = Column(Integer)            # message_id in the channel
+    group_message_id = Column(Integer)              # thread-root message_id in the group
+    footer_message_id = Column(Integer)             # end-of-inning summary message_id
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (UniqueConstraint("game_id", "inning", "half"),)
+
+    def __repr__(self) -> str:
+        return f"<InningPostRecord(game_id={self.game_id}, inning={self.inning}, half={self.half})>"
+
+
+class PlayMessageRecord(Base):
+    """A single play posted to the group discussion thread."""
+
+    __tablename__ = "play_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    game_id = Column(String, nullable=False, index=True)
+    at_bat_index = Column(Integer, nullable=False)  # MLB allPlays index, stable per play
+    group_message_id = Column(Integer, nullable=False)
+    last_description = Column(Text, nullable=False)
+    last_event = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (UniqueConstraint("game_id", "at_bat_index"),)
+
+    def __repr__(self) -> str:
+        return f"<PlayMessageRecord(game_id={self.game_id}, at_bat_index={self.at_bat_index})>"

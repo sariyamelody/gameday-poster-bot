@@ -3,17 +3,20 @@
 import asyncio
 import signal
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import click
 import structlog
 import uvloop
+from sqlalchemy import and_, select
 
 from .api.server import HealthServer
 from .bot import TelegramBot
 from .clients import MLBClient
 from .config import get_settings
 from .database import Repository, get_database_session
+from .database.models import GameRecord
 from .models import Game, Transaction
 from .observability import setup_telemetry, shutdown_telemetry
 from .scheduler import GameScheduler
@@ -64,6 +67,11 @@ class MarinersBot:
         self.scheduler.set_final_score_callback(self._check_final_scores)
         self.transaction_scheduler.set_transaction_sync_callback(self._sync_transactions)
 
+        # Play-by-play callbacks (only wired when channel is configured)
+        if self.settings.playbyplay_channel_id and self.settings.playbyplay_group_id:
+            self.scheduler.set_playbyplay_callback(self._poll_playbyplay)
+            self.scheduler.set_playbyplay_cleanup_callback(self._cleanup_playbyplay_data)
+
         logger.info("Mariners bot initialized", version="0.1.0")
 
     def _run_migrations(self) -> None:
@@ -77,13 +85,13 @@ class MarinersBot:
           parent of head so upgrade applies only the missing migration(s).
         - Existing DB with migration history: run upgrade head normally.
         """
-        from sqlalchemy import inspect
-
-        from alembic import command
         from alembic.autogenerate import compare_metadata
         from alembic.config import Config
         from alembic.runtime.migration import MigrationContext
         from alembic.script import ScriptDirectory
+        from sqlalchemy import inspect
+
+        from alembic import command
         from mariners_bot.database.models import Base
 
         logger.info("Running database migrations")
@@ -490,6 +498,404 @@ class MarinersBot:
         except Exception as e:
             logger.error("Failed to handle user transaction notification",
                         chat_id=chat_id, transaction_id=transaction.transaction_id, error=str(e))
+
+    # -------------------------------------------------------------------------
+    # Play-by-play polling
+    # -------------------------------------------------------------------------
+
+    # Event emoji for play descriptions
+    _PLAY_EMOJIS: dict[str, str] = {
+        "Home Run": "🚨",
+        "Triple": "🟣",
+        "Double": "🔵",
+        "Single": "⚪",
+        "Walk": "🟡",
+        "Intent Walk": "🟡",
+        "Hit By Pitch": "💥",
+        "Strikeout": "❌",
+        "Strikeout - DP": "❌",
+        "Groundout": "⬜",
+        "Grounded Into Double Play": "🔁",
+        "Double Play": "🔁",
+        "Triple Play": "🔁",
+        "Flyout": "⬜",
+        "Lineout": "⬜",
+        "Pop Out": "⬜",
+        "Bunt Groundout": "⬜",
+        "Bunt Pop Out": "⬜",
+        "Sac Fly": "⬜",
+        "Sac Fly Double Play": "🔁",
+        "Sac Bunt": "⬜",
+        "Sac Bunt Double Play": "🔁",
+        "Field Error": "🔴",
+        "Fielding Error": "🔴",
+        "Fielder's Choice": "⬜",
+        "Fielder's Choice Out": "⬜",
+        "Wild Pitch": "🌀",
+        "Passed Ball": "🌀",
+        "Balk": "🌀",
+        "Stolen Base 2B": "💨",
+        "Stolen Base 3B": "💨",
+        "Stolen Base Home": "💨",
+        "Caught Stealing 2B": "🛑",
+        "Caught Stealing 3B": "🛑",
+        "Caught Stealing Home": "🛑",
+        "Pickoff 1B": "🛑",
+        "Pickoff 2B": "🛑",
+        "Pickoff 3B": "🛑",
+        "Runner Out": "🛑",
+    }
+
+    def _ordinal(self, n: int) -> str:
+        """Return ordinal string for inning number (1st, 2nd, 3rd…)."""
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n if n < 20 else n % 10, "th")
+        return f"{n}{suffix}"
+
+    def _score_line(self, linescore: dict[str, Any], away_name: str, home_name: str) -> str:
+        """Format a compact score line: e.g. 'SEA 2 · HOU 1'."""
+        teams = linescore.get("teams", {})
+        away_runs = teams.get("away", {}).get("runs", 0)
+        home_runs = teams.get("home", {}).get("runs", 0)
+        away_abbr = away_name.split()[-1][:3].upper()
+        home_abbr = home_name.split()[-1][:3].upper()
+        return f"{away_abbr} {away_runs} · {home_abbr} {home_runs}"
+
+    def _format_inning_header(
+        self,
+        inning: int,
+        half: str,
+        linescore: dict[str, Any],
+        feed: dict[str, Any],
+    ) -> str:
+        """Build the channel/group inning header message."""
+        half_label = "Top" if half == "top" else "Bottom"
+        ordinal = self._ordinal(inning)
+
+        game_data = feed.get("gameData", {})
+        teams = game_data.get("teams", {})
+        away_name = teams.get("away", {}).get("teamName", "Away")
+        home_name = teams.get("home", {}).get("teamName", "Home")
+        score = self._score_line(linescore, away_name, home_name)
+
+        # Current pitcher from linescore defense
+        defense = linescore.get("defense", {})
+        pitcher_name = defense.get("pitcher", {}).get("fullName", "")
+        pitcher_line = f"{pitcher_name} pitching" if pitcher_name else ""
+
+        lines = [f"⚾ {half_label} of the {ordinal} Inning", score]
+        if pitcher_line:
+            lines.append(pitcher_line)
+
+        return "\n".join(lines)
+
+    def _format_play(self, play: dict[str, Any]) -> str:
+        """Format a single completed play for the group thread."""
+        result = play.get("result", {})
+        event = result.get("event", "")
+        description = result.get("description", "")
+        is_scoring = play.get("about", {}).get("isScoringPlay", False)
+        away_score = result.get("awayScore")
+        home_score = result.get("homeScore")
+
+        emoji = self._PLAY_EMOJIS.get(event, "⚾")
+        text = f"{emoji} {description}"
+
+        if is_scoring and away_score is not None and home_score is not None:
+            text += f"\n<b>{away_score}–{home_score}</b>"
+
+        return text
+
+    def _format_inning_footer(
+        self,
+        inning: int,
+        half: str,
+        linescore: dict[str, Any],
+        away_name: str,
+        home_name: str,
+    ) -> str:
+        """Build the end-of-inning summary posted in the group thread."""
+        half_label = "Top" if half == "top" else "Bottom"
+        ordinal = self._ordinal(inning)
+
+        # Per-inning stats from linescore.innings
+        innings_data = linescore.get("innings", [])
+        inning_entry: dict[str, Any] = next((i for i in innings_data if i.get("num") == inning), {})
+        half_key = "away" if half == "top" else "home"
+        half_data = inning_entry.get(half_key, {})
+        runs = half_data.get("runs", 0)
+        hits = half_data.get("hits", 0)
+        errors = half_data.get("errors", 0)
+
+        score = self._score_line(linescore, away_name, home_name)
+
+        return (
+            f"— End of {half_label} {ordinal} —\n"
+            f"{runs}R · {hits}H · {errors}E\n\n"
+            f"<b>{score}</b>"
+        )
+
+    async def _poll_playbyplay(self) -> None:
+        """Scheduled callback: poll live game feeds and post play-by-play updates."""
+        if not (self.settings.playbyplay_channel_id and self.settings.playbyplay_group_id):
+            return
+
+        try:
+            # Games notified but not yet final, within a 6-hour window
+            cutoff = datetime.now(UTC) - timedelta(hours=6)
+            async with self.db_session.get_session() as session:
+                result = await session.execute(
+                    select(GameRecord).where(
+                        and_(
+                            GameRecord.notification_sent == True,  # noqa: E712
+                            GameRecord.final_score_sent == False,  # noqa: E712
+                            GameRecord.date >= cutoff,
+                        )
+                    )
+                )
+                candidate_records = list(result.scalars())
+
+            if not candidate_records:
+                return
+
+            async with MLBClient(self.settings) as mlb_client:
+                for record in candidate_records:
+                    game_id = str(record.game_id)
+                    game_pk = int(game_id)
+                    try:
+                        await self._process_game_playbyplay(mlb_client, game_id, game_pk)
+                    except Exception as e:
+                        logger.error("Failed to process play-by-play for game", game_id=game_id, error=str(e))
+
+        except Exception as e:
+            logger.error("Failed to poll play-by-play", error=str(e))
+
+    async def _process_game_playbyplay(
+        self,
+        mlb_client: MLBClient,
+        game_id: str,
+        game_pk: int,
+    ) -> None:
+        """Process one game's live feed: ensure session exists, post new plays, edit corrections."""
+        # Ensure session exists
+        async with self.db_session.get_session() as session:
+            from .database import Repository as Repo
+            repo = Repo(session)
+            pbp_session = await repo.get_or_create_playbyplay_session(game_id, game_pk)
+            if not pbp_session.active:
+                return
+            last_play_index = pbp_session.last_play_index
+            await session.commit()
+
+        feed = await mlb_client.get_live_game_feed(game_pk)
+        if not feed:
+            return
+
+        game_state = feed.get("gameData", {}).get("status", {}).get("abstractGameState", "")
+        if game_state == "Preview":
+            return
+
+        all_plays: list[dict[str, Any]] = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
+        linescore: dict[str, Any] = feed.get("liveData", {}).get("linescore", {})
+        game_data = feed.get("gameData", {})
+        teams = game_data.get("teams", {})
+        away_name = teams.get("away", {}).get("teamName", "Away")
+        home_name = teams.get("home", {}).get("teamName", "Home")
+
+        completed_plays = [p for p in all_plays if p.get("about", {}).get("isComplete", False)]
+        new_plays = sorted(
+            [p for p in completed_plays if p.get("about", {}).get("atBatIndex", -1) > last_play_index],
+            key=lambda p: p["about"]["atBatIndex"],
+        )
+        old_plays = [p for p in completed_plays if p.get("about", {}).get("atBatIndex", -1) <= last_play_index]
+        # Only check recent plays for scorer corrections
+        recent_old = sorted(old_plays, key=lambda p: p["about"]["atBatIndex"])[-10:]
+
+        if new_plays:
+            await self._post_new_plays(game_id, new_plays, linescore, feed, away_name, home_name)
+
+        await self._check_updated_plays(game_id, recent_old)
+
+        new_last_index = max((p["about"]["atBatIndex"] for p in new_plays), default=last_play_index)
+        now = datetime.now(UTC)
+
+        async with self.db_session.get_session() as session:
+            from .database import Repository as Repo
+            repo = Repo(session)
+            await repo.update_playbyplay_session(
+                game_id=game_id,
+                last_play_index=new_last_index,
+                last_poll_at=now,
+            )
+            if game_state == "Final":
+                await repo.deactivate_playbyplay_session(game_id=game_id, finished_at=now)
+                logger.info("Play-by-play session complete", game_id=game_id)
+            await session.commit()
+
+    async def _post_new_plays(
+        self,
+        game_id: str,
+        new_plays: list[dict[str, Any]],
+        linescore: dict[str, Any],
+        feed: dict[str, Any],
+        away_name: str,
+        home_name: str,
+    ) -> None:
+        """For each new play: open a new inning post if needed, then post the play."""
+        async with self.db_session.get_session() as session:
+            from .database import Repository as Repo
+            repo = Repo(session)
+            current_post = await repo.get_current_inning_post(game_id)
+
+        for play in new_plays:
+            about = play.get("about", {})
+            play_inning = about.get("inning", 0)
+            play_half = about.get("halfInning", "top")
+            at_bat_index = about.get("atBatIndex", -1)
+
+            # Open a new inning post when the inning or half changes
+            if (
+                current_post is None
+                or current_post.inning != play_inning
+                or current_post.half != play_half
+            ):
+                prev_post = current_post
+
+                # Post end-of-inning footer for the previous inning
+                if prev_post is not None and prev_post.group_message_id is not None:
+                    footer_text = self._format_inning_footer(
+                        prev_post.inning, prev_post.half, linescore, away_name, home_name
+                    )
+                    footer_msg_id = await self.telegram_bot.post_inning_footer(
+                        group_message_id=prev_post.group_message_id,
+                        text=footer_text,
+                    )
+                    if footer_msg_id:
+                        async with self.db_session.get_session() as session:
+                            from .database import Repository as Repo
+                            repo = Repo(session)
+                            await repo.update_inning_post_footer_msg_id(prev_post.id, footer_msg_id)
+                            await session.commit()
+                        # Store for later editing once next channel_msg_id is known
+                        prev_post = prev_post  # updated ref carried below
+
+                # Post the new inning header to the channel (and wait for group forward)
+                header_text = self._format_inning_header(play_inning, play_half, linescore, feed)
+                channel_msg_id, group_msg_id = await self.telegram_bot.post_inning_header(
+                    header_text=header_text,
+                )
+
+                async with self.db_session.get_session() as session:
+                    from .database import Repository as Repo
+                    repo = Repo(session)
+                    new_post = await repo.create_inning_post(
+                        game_id=game_id,
+                        inning=play_inning,
+                        half=play_half,
+                        channel_message_id=channel_msg_id,
+                        group_message_id=group_msg_id,
+                    )
+
+                    # If prev inning's footer exists and we now have a channel URL,
+                    # edit it to append the next-inning link.
+                    if (
+                        prev_post is not None
+                        and prev_post.footer_message_id is not None
+                        and prev_post.group_message_id is not None
+                        and channel_msg_id is not None
+                    ):
+                        next_url = self.telegram_bot._make_channel_post_url(channel_msg_id)
+                        if next_url:
+                            next_half_label = "Top" if play_half == "top" else "Bottom"
+                            next_ordinal = self._ordinal(play_inning)
+                            footer_text = self._format_inning_footer(
+                                prev_post.inning, prev_post.half, linescore, away_name, home_name
+                            )
+                            updated_footer = (
+                                f"{footer_text}\n"
+                                f'⬇️ <a href="{next_url}">{next_half_label} of the {next_ordinal} →</a>'
+                            )
+                            await self.telegram_bot.update_inning_footer_text(
+                                footer_message_id=prev_post.footer_message_id,
+                                new_text=updated_footer,
+                            )
+
+                    await session.commit()
+
+                current_post = new_post
+
+            # Post the play to the group thread
+            if current_post is not None and current_post.group_message_id is not None:
+                play_text = self._format_play(play)
+                group_play_msg_id = await self.telegram_bot.post_play(
+                    group_message_id=current_post.group_message_id,
+                    text=play_text,
+                )
+                if group_play_msg_id:
+                    result_data = play.get("result", {})
+                    async with self.db_session.get_session() as session:
+                        from .database import Repository as Repo
+                        repo = Repo(session)
+                        await repo.save_play_message(
+                            game_id=game_id,
+                            at_bat_index=at_bat_index,
+                            group_message_id=group_play_msg_id,
+                            description=result_data.get("description", ""),
+                            event=result_data.get("event", ""),
+                        )
+                        await session.commit()
+
+    async def _check_updated_plays(
+        self, game_id: str, plays_from_feed: list[dict[str, Any]]
+    ) -> None:
+        """Edit any already-posted play messages that the official scorer has corrected."""
+        if not plays_from_feed:
+            return
+
+        async with self.db_session.get_session() as session:
+            from .database import Repository as Repo
+            repo = Repo(session)
+
+            for play in plays_from_feed:
+                about = play.get("about", {})
+                at_bat_index = about.get("atBatIndex", -1)
+                result = play.get("result", {})
+                new_desc = result.get("description", "")
+                new_event = result.get("event", "")
+
+                existing = await repo.get_play_message(game_id, at_bat_index)
+                if not existing:
+                    continue
+
+                if existing.last_description != new_desc or existing.last_event != new_event:
+                    new_text = self._format_play(play)
+                    await self.telegram_bot.edit_play(
+                        group_message_id=existing.group_message_id,
+                        new_text=new_text,
+                    )
+                    await repo.update_play_message(existing.id, new_desc, new_event)
+                    logger.info(
+                        "Edited corrected play",
+                        game_id=game_id,
+                        at_bat_index=at_bat_index,
+                        old_event=existing.last_event,
+                        new_event=new_event,
+                    )
+
+            await session.commit()
+
+    async def _cleanup_playbyplay_data(self) -> None:
+        """Delete play-by-play data for finished sessions past the retention window."""
+        try:
+            async with self.db_session.get_session() as session:
+                repo = Repository(session)
+                deleted = await repo.cleanup_playbyplay_data(self.settings.playbyplay_retention_hours)
+                await session.commit()
+
+            if deleted:
+                logger.info("Play-by-play cleanup complete", sessions_deleted=deleted)
+
+        except Exception as e:
+            logger.error("Failed to cleanup play-by-play data", error=str(e))
 
     async def _process_pending_transaction_batches(self) -> None:
         """Process any pending transaction batches that should be sent."""

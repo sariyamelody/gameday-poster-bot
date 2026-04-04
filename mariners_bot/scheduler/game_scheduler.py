@@ -21,6 +21,8 @@ logger = structlog.get_logger(__name__)
 _schedule_sync_callback: Callable[[], Awaitable[None]] | None = None
 _notification_callback: Callable[[NotificationJob], Awaitable[bool]] | None = None
 _final_score_callback: Callable[[], Awaitable[None]] | None = None
+_playbyplay_callback: Callable[[], Awaitable[None]] | None = None
+_playbyplay_cleanup_callback: Callable[[], Awaitable[None]] | None = None
 
 
 async def _sync_schedule_wrapper() -> None:
@@ -45,6 +47,28 @@ async def _check_final_scores_wrapper() -> None:
 
     except Exception as e:
         logger.error("Error in final score callback", error=str(e))
+
+
+async def _playbyplay_wrapper() -> None:
+    """Wrapper for play-by-play polling with error handling."""
+    try:
+        if _playbyplay_callback:
+            await _playbyplay_callback()
+        else:
+            logger.error("No play-by-play callback set")
+    except Exception as e:
+        logger.error("Error in play-by-play callback", error=str(e))
+
+
+async def _playbyplay_cleanup_wrapper() -> None:
+    """Wrapper for play-by-play cleanup with error handling."""
+    try:
+        if _playbyplay_cleanup_callback:
+            await _playbyplay_cleanup_callback()
+        else:
+            logger.error("No play-by-play cleanup callback set")
+    except Exception as e:
+        logger.error("Error in play-by-play cleanup callback", error=str(e))
 
 
 async def _notification_wrapper(notification_job: NotificationJob) -> None:
@@ -111,6 +135,10 @@ class GameScheduler:
             # Schedule final score poller
             self._schedule_final_score_poller()
 
+            # Schedule play-by-play jobs if callbacks are registered
+            self._schedule_playbyplay_poller()
+            self._schedule_playbyplay_cleanup()
+
             logger.info("Game scheduler started")
 
         except Exception as e:
@@ -146,6 +174,18 @@ class GameScheduler:
         global _final_score_callback
         _final_score_callback = callback
         logger.debug("Final score callback set")
+
+    def set_playbyplay_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
+        """Set the callback for polling live game play-by-play."""
+        global _playbyplay_callback
+        _playbyplay_callback = callback
+        logger.debug("Play-by-play callback set")
+
+    def set_playbyplay_cleanup_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
+        """Set the callback for cleaning up old play-by-play data."""
+        global _playbyplay_cleanup_callback
+        _playbyplay_cleanup_callback = callback
+        logger.debug("Play-by-play cleanup callback set")
 
     async def schedule_game_notifications(self, games: list[Game]) -> int:
         """Schedule notification jobs for a list of games."""
@@ -348,5 +388,38 @@ class GameScheduler:
             hour=self.settings.schedule_sync_hour,
             timezone=self.settings.scheduler_timezone
         )
+
+    def _schedule_playbyplay_poller(self) -> None:
+        """Schedule the live game play-by-play poller."""
+        global _playbyplay_callback
+        if not _playbyplay_callback:
+            logger.debug("No play-by-play callback set, skipping play-by-play scheduling")
+            return
+
+        interval = self.settings.playbyplay_poll_interval
+        self.scheduler.add_job(
+            _playbyplay_wrapper,
+            trigger=IntervalTrigger(seconds=interval, timezone=self.timezone),
+            id='playbyplay_poller',
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("Scheduled play-by-play poller", interval_seconds=interval)
+
+    def _schedule_playbyplay_cleanup(self) -> None:
+        """Schedule daily cleanup of old play-by-play data (3 AM PT)."""
+        global _playbyplay_cleanup_callback
+        if not _playbyplay_cleanup_callback:
+            logger.debug("No play-by-play cleanup callback set, skipping cleanup scheduling")
+            return
+
+        self.scheduler.add_job(
+            _playbyplay_cleanup_wrapper,
+            trigger=CronTrigger(hour=3, minute=0, timezone=self.timezone),
+            id='playbyplay_cleanup',
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("Scheduled play-by-play cleanup job", hour=3, timezone=self.settings.scheduler_timezone)
 
 

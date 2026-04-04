@@ -368,6 +368,37 @@ class MLBClient:
 
         return type_mapping.get(game_type, GameType.REGULAR)
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10)
+    )
+    async def get_live_game_feed(self, game_pk: int) -> dict[str, Any] | None:
+        """Fetch the live game feed from the MLB Stats API v1.1 endpoint.
+
+        This is a separate endpoint from the base v1 API and returns real-time
+        play-by-play data including allPlays, linescore, and game state.
+        """
+        if not self.session:
+            raise RuntimeError("Client not initialized. Use async context manager.")
+
+        url = f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
+
+        logger.debug("Fetching live game feed", game_pk=game_pk)
+
+        try:
+            async with self.session.get(url) as response:
+                response.raise_for_status()
+                data = await response.json()
+                logger.debug("Live game feed fetched", game_pk=game_pk)
+                return data  # type: ignore[no-any-return]
+
+        except aiohttp.ClientError as e:
+            logger.error("Failed to fetch live game feed", game_pk=game_pk, error=str(e))
+            raise
+        except TimeoutError:
+            logger.error("Live game feed request timed out", game_pk=game_pk)
+            raise
+
     async def get_team_transactions(
         self,
         team_id: int | None = None,

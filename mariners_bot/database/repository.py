@@ -3,13 +3,16 @@
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Game, NotificationJob, Transaction, User, UserTransactionPreferences
 from .models import (
     GameRecord,
+    InningPostRecord,
     NotificationJobRecord,
+    PlayByPlaySessionRecord,
+    PlayMessageRecord,
     TransactionRecord,
     UserRecord,
     UserTransactionPreference,
@@ -604,3 +607,261 @@ class Repository:
             other=record.other,  # type: ignore[arg-type]
             major_league_only=record.major_league_only,  # type: ignore[arg-type]
         )
+
+    # Play-by-play session operations
+
+    async def get_or_create_playbyplay_session(
+        self, game_id: str, game_pk: int
+    ) -> PlayByPlaySessionRecord:
+        """Get an existing session or create a new one for the given game."""
+        try:
+            result = await self.session.execute(
+                select(PlayByPlaySessionRecord).where(
+                    PlayByPlaySessionRecord.game_id == game_id
+                )
+            )
+            record = result.scalar_one_or_none()
+            if record:
+                return record
+
+            record = PlayByPlaySessionRecord(
+                game_id=game_id,
+                game_pk=game_pk,
+                active=True,
+                last_play_index=-1,
+            )
+            self.session.add(record)
+            await self.session.flush()
+            logger.info("Created play-by-play session", game_id=game_id)
+            return record
+
+        except Exception as e:
+            logger.error("Failed to get/create play-by-play session", game_id=game_id, error=str(e))
+            raise
+
+    async def get_active_playbyplay_sessions(self) -> list[PlayByPlaySessionRecord]:
+        """Return all currently active play-by-play sessions."""
+        try:
+            result = await self.session.execute(
+                select(PlayByPlaySessionRecord).where(
+                    PlayByPlaySessionRecord.active == True  # noqa: E712
+                )
+            )
+            return list(result.scalars())
+        except Exception as e:
+            logger.error("Failed to get active play-by-play sessions", error=str(e))
+            raise
+
+    async def update_playbyplay_session(
+        self, game_id: str, last_play_index: int, last_poll_at: datetime
+    ) -> None:
+        """Update the last-seen play index and poll timestamp."""
+        try:
+            await self.session.execute(
+                update(PlayByPlaySessionRecord)
+                .where(PlayByPlaySessionRecord.game_id == game_id)
+                .values(last_play_index=last_play_index, last_poll_at=last_poll_at)
+            )
+        except Exception as e:
+            logger.error("Failed to update play-by-play session", game_id=game_id, error=str(e))
+            raise
+
+    async def deactivate_playbyplay_session(
+        self, game_id: str, finished_at: datetime
+    ) -> None:
+        """Mark a session as finished."""
+        try:
+            await self.session.execute(
+                update(PlayByPlaySessionRecord)
+                .where(PlayByPlaySessionRecord.game_id == game_id)
+                .values(active=False, finished_at=finished_at)
+            )
+        except Exception as e:
+            logger.error("Failed to deactivate play-by-play session", game_id=game_id, error=str(e))
+            raise
+
+    # Inning post operations
+
+    async def get_current_inning_post(self, game_id: str) -> InningPostRecord | None:
+        """Return the most recently created inning post for a game."""
+        try:
+            result = await self.session.execute(
+                select(InningPostRecord)
+                .where(InningPostRecord.game_id == game_id)
+                .order_by(InningPostRecord.id.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+        except Exception as e:
+            logger.error("Failed to get current inning post", game_id=game_id, error=str(e))
+            raise
+
+    async def create_inning_post(
+        self,
+        game_id: str,
+        inning: int,
+        half: str,
+        channel_message_id: int | None,
+        group_message_id: int | None,
+    ) -> InningPostRecord:
+        """Insert a new inning post record."""
+        try:
+            record = InningPostRecord(
+                game_id=game_id,
+                inning=inning,
+                half=half,
+                channel_message_id=channel_message_id,
+                group_message_id=group_message_id,
+            )
+            self.session.add(record)
+            await self.session.flush()
+            return record
+        except Exception as e:
+            logger.error("Failed to create inning post", game_id=game_id, error=str(e))
+            raise
+
+    async def update_inning_post_group_msg_id(
+        self, inning_post_id: int, group_message_id: int
+    ) -> None:
+        """Set the group message ID once the channel auto-forward is detected."""
+        try:
+            await self.session.execute(
+                update(InningPostRecord)
+                .where(InningPostRecord.id == inning_post_id)
+                .values(group_message_id=group_message_id)
+            )
+        except Exception as e:
+            logger.error("Failed to update inning post group_msg_id", id=inning_post_id, error=str(e))
+            raise
+
+    async def update_inning_post_footer_msg_id(
+        self, inning_post_id: int, footer_message_id: int
+    ) -> None:
+        """Store the footer message ID so we can edit it later with the next-inning link."""
+        try:
+            await self.session.execute(
+                update(InningPostRecord)
+                .where(InningPostRecord.id == inning_post_id)
+                .values(footer_message_id=footer_message_id)
+            )
+        except Exception as e:
+            logger.error("Failed to update inning post footer_msg_id", id=inning_post_id, error=str(e))
+            raise
+
+    # Play message operations
+
+    async def get_play_message(
+        self, game_id: str, at_bat_index: int
+    ) -> PlayMessageRecord | None:
+        """Fetch a stored play message by game + at-bat index."""
+        try:
+            result = await self.session.execute(
+                select(PlayMessageRecord).where(
+                    and_(
+                        PlayMessageRecord.game_id == game_id,
+                        PlayMessageRecord.at_bat_index == at_bat_index,
+                    )
+                )
+            )
+            return result.scalar_one_or_none()
+        except Exception as e:
+            logger.error("Failed to get play message", game_id=game_id, at_bat_index=at_bat_index, error=str(e))
+            raise
+
+    async def save_play_message(
+        self,
+        game_id: str,
+        at_bat_index: int,
+        group_message_id: int,
+        description: str,
+        event: str,
+    ) -> PlayMessageRecord:
+        """Insert a new play message record."""
+        try:
+            record = PlayMessageRecord(
+                game_id=game_id,
+                at_bat_index=at_bat_index,
+                group_message_id=group_message_id,
+                last_description=description,
+                last_event=event,
+            )
+            self.session.add(record)
+            await self.session.flush()
+            return record
+        except Exception as e:
+            logger.error("Failed to save play message", game_id=game_id, at_bat_index=at_bat_index, error=str(e))
+            raise
+
+    async def update_play_message(
+        self, play_msg_id: int, description: str, event: str
+    ) -> None:
+        """Update the stored description/event after a scorer correction."""
+        try:
+            await self.session.execute(
+                update(PlayMessageRecord)
+                .where(PlayMessageRecord.id == play_msg_id)
+                .values(last_description=description, last_event=event)
+            )
+        except Exception as e:
+            logger.error("Failed to update play message", id=play_msg_id, error=str(e))
+            raise
+
+    async def get_recent_play_messages(
+        self, game_id: str, limit: int = 10
+    ) -> list[PlayMessageRecord]:
+        """Return the N most recently stored plays for a game (for scorer-correction checks)."""
+        try:
+            result = await self.session.execute(
+                select(PlayMessageRecord)
+                .where(PlayMessageRecord.game_id == game_id)
+                .order_by(PlayMessageRecord.at_bat_index.desc())
+                .limit(limit)
+            )
+            return list(result.scalars())
+        except Exception as e:
+            logger.error("Failed to get recent play messages", game_id=game_id, error=str(e))
+            raise
+
+    # Cleanup
+
+    async def cleanup_playbyplay_data(self, retention_hours: int) -> int:
+        """Delete play-by-play data for finished sessions older than retention_hours.
+
+        Returns the number of sessions deleted.
+        """
+        try:
+            cutoff = datetime.now(UTC) - timedelta(hours=retention_hours)
+
+            # Find sessions to clean up
+            result = await self.session.execute(
+                select(PlayByPlaySessionRecord.game_id).where(
+                    and_(
+                        PlayByPlaySessionRecord.active == False,  # noqa: E712
+                        PlayByPlaySessionRecord.finished_at <= cutoff,
+                    )
+                )
+            )
+            game_ids = [row[0] for row in result.all()]
+
+            if not game_ids:
+                return 0
+
+            # Cascade delete in order (children first)
+            await self.session.execute(
+                delete(PlayMessageRecord).where(PlayMessageRecord.game_id.in_(game_ids))
+            )
+            await self.session.execute(
+                delete(InningPostRecord).where(InningPostRecord.game_id.in_(game_ids))
+            )
+            await self.session.execute(
+                delete(PlayByPlaySessionRecord).where(
+                    PlayByPlaySessionRecord.game_id.in_(game_ids)
+                )
+            )
+
+            logger.info("Cleaned up play-by-play data", sessions_deleted=len(game_ids))
+            return len(game_ids)
+
+        except Exception as e:
+            logger.error("Failed to cleanup play-by-play data", error=str(e))
+            raise
