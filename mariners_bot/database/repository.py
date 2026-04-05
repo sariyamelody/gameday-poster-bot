@@ -45,8 +45,7 @@ class Repository:
                 existing_game.away_team = game.away_team  # type: ignore[assignment]
                 existing_game.venue = game.venue  # type: ignore[assignment]
                 existing_game.status = game.status.value  # type: ignore[assignment]
-                existing_game.notification_sent = game.notification_sent  # type: ignore[assignment]
-                existing_game.final_score_sent = game.final_score_sent  # type: ignore[assignment]
+                # notification_sent and final_score_sent are local state — never overwrite
                 existing_game.updated_at = datetime.now(UTC)  # type: ignore[assignment]
 
                 logger.debug("Updated existing game", game_id=game.game_id)
