@@ -1,8 +1,12 @@
 """SQLAlchemy database models."""
 
 
+from __future__ import annotations
+
+from datetime import datetime  # noqa: TC003
+
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 
@@ -138,14 +142,14 @@ class PlayByPlaySessionRecord(Base):
 
     __tablename__ = "playbyplay_sessions"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    game_id = Column(String, nullable=False, unique=True, index=True)
-    game_pk = Column(Integer, nullable=False)
-    active = Column(Boolean, default=True, index=True)
-    last_play_index = Column(Integer, default=-1)
-    started_at = Column(DateTime(timezone=True), default=func.now())
-    finished_at = Column(DateTime(timezone=True))
-    last_poll_at = Column(DateTime(timezone=True))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    game_pk: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_play_index: Mapped[int] = mapped_column(Integer, default=-1)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self) -> str:
         return f"<PlayByPlaySessionRecord(game_id={self.game_id}, active={self.active})>"
@@ -156,14 +160,14 @@ class InningPostRecord(Base):
 
     __tablename__ = "inning_posts"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    game_id = Column(String, nullable=False, index=True)
-    inning = Column(Integer, nullable=False)
-    half = Column(String, nullable=False)           # 'top' or 'bottom'
-    channel_message_id = Column(Integer)            # message_id in the channel
-    group_message_id = Column(Integer)              # thread-root message_id in the group
-    footer_message_id = Column(Integer)             # end-of-inning summary message_id
-    created_at = Column(DateTime(timezone=True), default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    inning: Mapped[int] = mapped_column(Integer, nullable=False)
+    half: Mapped[str] = mapped_column(String, nullable=False)           # 'top' or 'bottom'
+    channel_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)   # message_id in the channel
+    group_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)     # thread-root message_id in the group
+    footer_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)    # end-of-inning summary message_id
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=func.now())
 
     __table_args__ = (UniqueConstraint("game_id", "inning", "half"),)
 
@@ -176,13 +180,13 @@ class PlayMessageRecord(Base):
 
     __tablename__ = "play_messages"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    game_id = Column(String, nullable=False, index=True)
-    at_bat_index = Column(Integer, nullable=False)  # MLB allPlays index, stable per play
-    group_message_id = Column(Integer, nullable=False)
-    last_description = Column(Text, nullable=False)
-    last_event = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    at_bat_index: Mapped[int] = mapped_column(Integer, nullable=False)  # MLB allPlays index, stable per play
+    group_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_description: Mapped[str] = mapped_column(Text, nullable=False)
+    last_event: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=func.now())
 
     __table_args__ = (UniqueConstraint("game_id", "at_bat_index"),)
 
