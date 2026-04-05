@@ -3,7 +3,7 @@
 import asyncio
 
 import structlog
-from telegram import Update
+from telegram import Message, MessageOriginChannel, Update
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (
@@ -33,6 +33,10 @@ class TelegramBot:
         # Create bot application
         self.application = Application.builder().token(self.bot_token).build()
         self.bot = self.application.bot
+
+        # Pending futures: channel_message_id -> Future[group_message_id]
+        # Resolved by _handle_group_channel_forward when the auto-forward arrives.
+        self._pending_channel_forwards: dict[int, asyncio.Future[int]] = {}
 
         # Setup command handlers
         self._setup_handlers()
@@ -166,6 +170,22 @@ class TelegramBot:
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self._handle_message)
         )
+
+        # Handler to capture auto-forwarded channel posts in the linked discussion group.
+        # When a channel post is forwarded to the group by Telegram, we resolve the
+        # pending future so post_inning_header can learn the group message ID.
+        if self.settings.playbyplay_group_id:
+            try:
+                group_id = int(self.settings.playbyplay_group_id)
+                self.application.add_handler(
+                    MessageHandler(
+                        filters.Chat(chat_id=group_id),
+                        self._handle_group_channel_forward,
+                    )
+                )
+                logger.debug("Registered group forward handler", group_id=group_id)
+            except (ValueError, TypeError):
+                logger.warning("Invalid PLAYBYPLAY_GROUP_ID, group forward handler not registered")
 
         logger.debug("Bot handlers configured")
 
@@ -799,3 +819,193 @@ class TelegramBot:
             logger.error("Error toggling preference", preference=preference_name, error=str(e))
             if update.message:
                 await update.message.reply_text(f"Sorry, I couldn't update your {display_name} preference right now.")
+
+    # -------------------------------------------------------------------------
+    # Play-by-play channel methods
+    # -------------------------------------------------------------------------
+
+    async def _handle_group_channel_forward(
+        self, update: Update, _context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Detect auto-forwarded channel posts in the linked discussion group.
+
+        When a channel post is automatically forwarded to the linked group by
+        Telegram, we resolve the pending future so post_inning_header() can
+        learn the group message ID and thread play updates under it.
+        """
+        if not update.message or not update.message.forward_origin:
+            return
+
+        origin = update.message.forward_origin
+        if not isinstance(origin, MessageOriginChannel):
+            return
+
+        if str(origin.chat.id) != str(self.settings.playbyplay_channel_id):
+            return
+
+        channel_msg_id = origin.message_id
+        group_msg_id = update.message.message_id
+
+        future = self._pending_channel_forwards.pop(channel_msg_id, None)
+        if future and not future.done():
+            future.set_result(group_msg_id)
+            logger.debug(
+                "Resolved channel forward future",
+                channel_msg_id=channel_msg_id,
+                group_msg_id=group_msg_id,
+            )
+
+    def _make_channel_post_url(self, message_id: int) -> str | None:
+        """Build a deep link to a channel post."""
+        if self.settings.playbyplay_channel_username:
+            return f"https://t.me/{self.settings.playbyplay_channel_username}/{message_id}"
+
+        if self.settings.playbyplay_channel_id:
+            cid = str(self.settings.playbyplay_channel_id)
+            # Private channels have IDs like -1001234567890; strip the leading -100
+            if cid.startswith("-100"):
+                return f"https://t.me/c/{cid[4:]}/{message_id}"
+
+        return None
+
+    async def post_inning_header(
+        self,
+        header_text: str,
+    ) -> tuple[int | None, int | None]:
+        """Post an inning header to the channel and wait for the group auto-forward.
+
+        Returns (channel_message_id, group_message_id).  group_message_id may be
+        None if the channel has no linked discussion group or the forward times out.
+        """
+        if not self.settings.playbyplay_channel_id:
+            return None, None
+
+        try:
+            channel_msg: Message = await self.bot.send_message(
+                chat_id=self.settings.playbyplay_channel_id,
+                text=header_text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            channel_msg_id = channel_msg.message_id
+        except TelegramError as e:
+            logger.error("Failed to post inning header to channel", error=str(e))
+            return None, None
+
+        if not self.settings.playbyplay_group_id:
+            return channel_msg_id, None
+
+        # Register a future; _handle_group_channel_forward resolves it when the
+        # auto-forwarded copy arrives in the discussion group.
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future[int] = loop.create_future()
+        self._pending_channel_forwards[channel_msg_id] = future
+
+        try:
+            group_msg_id: int = await asyncio.wait_for(
+                asyncio.shield(future), timeout=15.0
+            )
+        except TimeoutError:
+            self._pending_channel_forwards.pop(channel_msg_id, None)
+            logger.warning(
+                "Timed out waiting for group forward of channel post",
+                channel_msg_id=channel_msg_id,
+            )
+            return channel_msg_id, None
+
+        # Edit the channel post to append a link to the group discussion thread.
+        group_url = None
+        if self.settings.playbyplay_group_id:
+            gid = str(self.settings.playbyplay_group_id)
+            if gid.startswith("-100"):
+                group_url = f"https://t.me/c/{gid[4:]}/{group_msg_id}"
+
+        if group_url:
+            try:
+                updated_text = (
+                    f"{header_text}\n\n"
+                    f'💬 <a href="{group_url}">Follow play-by-play →</a>'
+                )
+                await self.bot.edit_message_text(
+                    chat_id=self.settings.playbyplay_channel_id,
+                    message_id=channel_msg_id,
+                    text=updated_text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+            except TelegramError as e:
+                logger.warning("Failed to edit channel post with group link", error=str(e))
+
+        return channel_msg_id, group_msg_id
+
+    async def post_play(self, group_message_id: int, text: str) -> int | None:
+        """Post a play update as a threaded reply in the discussion group."""
+        if not self.settings.playbyplay_group_id:
+            return None
+
+        try:
+            msg: Message = await self.bot.send_message(
+                chat_id=self.settings.playbyplay_group_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+                reply_to_message_id=group_message_id,
+            )
+            return int(msg.message_id)
+        except TelegramError as e:
+            logger.error("Failed to post play to group", group_message_id=group_message_id, error=str(e))
+            return None
+
+    async def edit_play(self, group_message_id: int, new_text: str) -> None:
+        """Edit a previously posted play message (scorer correction)."""
+        if not self.settings.playbyplay_group_id:
+            return
+
+        try:
+            await self.bot.edit_message_text(
+                chat_id=self.settings.playbyplay_group_id,
+                message_id=group_message_id,
+                text=new_text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        except TelegramError as e:
+            logger.warning("Failed to edit play message", group_message_id=group_message_id, error=str(e))
+
+    async def post_inning_footer(self, group_message_id: int, text: str) -> int | None:
+        """Post an end-of-inning summary as a threaded reply. Returns the message ID."""
+        if not self.settings.playbyplay_group_id:
+            return None
+
+        try:
+            msg: Message = await self.bot.send_message(
+                chat_id=self.settings.playbyplay_group_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+                reply_to_message_id=group_message_id,
+            )
+            return int(msg.message_id)
+        except TelegramError as e:
+            logger.error("Failed to post inning footer", group_message_id=group_message_id, error=str(e))
+            return None
+
+    async def update_inning_footer_text(
+        self,
+        footer_message_id: int,
+        new_text: str,
+    ) -> None:
+        """Replace the full text of an inning footer message."""
+        if not self.settings.playbyplay_group_id:
+            return
+
+        try:
+            await self.bot.edit_message_text(
+                chat_id=self.settings.playbyplay_group_id,
+                message_id=footer_message_id,
+                text=new_text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        except TelegramError as e:
+            logger.warning("Failed to update inning footer text", footer_message_id=footer_message_id, error=str(e))

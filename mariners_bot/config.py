@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # Health Check Configuration
     health_check_port: int = Field(default=8000)
 
+    # Play-by-play channel configuration
+    playbyplay_channel_id: str | None = Field(default=None)       # Channel for inning header posts
+    playbyplay_group_id: str | None = Field(default=None)         # Linked discussion group for play threads
+    playbyplay_channel_username: str | None = Field(default=None) # Public username for deep links (no @)
+    playbyplay_poll_interval: int = Field(default=20)             # Seconds between live feed polls
+    playbyplay_retention_hours: int = Field(default=72)           # Hours to keep data after game ends
+
     # Application Configuration
     debug: bool = Field(default=False)
     environment: str = Field(default="production")

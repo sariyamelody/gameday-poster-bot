@@ -1,8 +1,12 @@
 """SQLAlchemy database models."""
 
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
-from sqlalchemy.orm import DeclarativeBase
+from __future__ import annotations
+
+from datetime import datetime  # noqa: TC003
+
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 
@@ -131,3 +135,60 @@ class UserTransactionPreference(Base):
     def __repr__(self) -> str:
         """String representation of the user preference record."""
         return f"<UserTransactionPreference(chat_id={self.chat_id})>"
+
+
+class PlayByPlaySessionRecord(Base):
+    """Tracks an active play-by-play session for a live game."""
+
+    __tablename__ = "playbyplay_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    game_pk: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_play_index: Mapped[int] = mapped_column(Integer, default=-1)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<PlayByPlaySessionRecord(game_id={self.game_id}, active={self.active})>"
+
+
+class InningPostRecord(Base):
+    """A single inning-half post in the play-by-play channel."""
+
+    __tablename__ = "inning_posts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    inning: Mapped[int] = mapped_column(Integer, nullable=False)
+    half: Mapped[str] = mapped_column(String, nullable=False)           # 'top' or 'bottom'
+    channel_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)   # message_id in the channel
+    group_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)     # thread-root message_id in the group
+    footer_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)    # end-of-inning summary message_id
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (UniqueConstraint("game_id", "inning", "half"),)
+
+    def __repr__(self) -> str:
+        return f"<InningPostRecord(game_id={self.game_id}, inning={self.inning}, half={self.half})>"
+
+
+class PlayMessageRecord(Base):
+    """A single play posted to the group discussion thread."""
+
+    __tablename__ = "play_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    at_bat_index: Mapped[int] = mapped_column(Integer, nullable=False)  # MLB allPlays index, stable per play
+    group_message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_description: Mapped[str] = mapped_column(Text, nullable=False)
+    last_event: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (UniqueConstraint("game_id", "at_bat_index"),)
+
+    def __repr__(self) -> str:
+        return f"<PlayMessageRecord(game_id={self.game_id}, at_bat_index={self.at_bat_index})>"
