@@ -17,7 +17,7 @@ Migrations are auto-generated — after changing a model, run `migrate` and Alem
 
 ## Architecture
 
-- **`mariners_bot/clients/mlb_client.py`** — MLB Stats API (base URL: `statsapi.mlb.com/api/v1`, Mariners team ID: `136`)
+- **`mariners_bot/clients/mlb_client.py`** — MLB Stats API (base URL: `statsapi.mlb.com/api/v1`, Mariners team ID: `136`); live game feed uses a separate v1.1 endpoint: `statsapi.mlb.com/api/v1.1/game/{gamePk}/feed/live`
 - **`mariners_bot/scheduler/game_scheduler.py`** — APScheduler jobs: pre-game notifications (DateTrigger) and final score poller (IntervalTrigger, every 30s)
 - **`mariners_bot/scheduler/transaction_scheduler.py`** — Polls MLB transactions every 5 minutes; notifies users of trades, signings, injuries, etc. Per-user preferences stored in `user_transaction_preferences` table.
 - **`mariners_bot/bot/telegram_bot.py`** — Telegram bot, command handlers, message sending
