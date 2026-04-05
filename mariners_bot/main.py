@@ -85,13 +85,13 @@ class MarinersBot:
           parent of head so upgrade applies only the missing migration(s).
         - Existing DB with migration history: run upgrade head normally.
         """
+        from sqlalchemy import inspect
+
+        from alembic import command
         from alembic.autogenerate import compare_metadata
         from alembic.config import Config
         from alembic.runtime.migration import MigrationContext
         from alembic.script import ScriptDirectory
-        from sqlalchemy import inspect
-
-        from alembic import command
         from mariners_bot.database.models import Base
 
         logger.info("Running database migrations")
@@ -551,13 +551,11 @@ class MarinersBot:
         suffix = {1: "st", 2: "nd", 3: "rd"}.get(n if n < 20 else n % 10, "th")
         return f"{n}{suffix}"
 
-    def _score_line(self, linescore: dict[str, Any], away_name: str, home_name: str) -> str:
+    def _score_line(self, linescore: dict[str, Any], away_abbr: str, home_abbr: str) -> str:
         """Format a compact score line: e.g. 'SEA 2 · HOU 1'."""
         teams = linescore.get("teams", {})
         away_runs = teams.get("away", {}).get("runs", 0)
         home_runs = teams.get("home", {}).get("runs", 0)
-        away_abbr = away_name.split()[-1][:3].upper()
-        home_abbr = home_name.split()[-1][:3].upper()
         return f"{away_abbr} {away_runs} · {home_abbr} {home_runs}"
 
     def _format_inning_header(
@@ -565,17 +563,14 @@ class MarinersBot:
         inning: int,
         half: str,
         linescore: dict[str, Any],
-        feed: dict[str, Any],
+        away_abbr: str,
+        home_abbr: str,
     ) -> str:
         """Build the channel/group inning header message."""
         half_label = "Top" if half == "top" else "Bottom"
         ordinal = self._ordinal(inning)
 
-        game_data = feed.get("gameData", {})
-        teams = game_data.get("teams", {})
-        away_name = teams.get("away", {}).get("teamName", "Away")
-        home_name = teams.get("home", {}).get("teamName", "Home")
-        score = self._score_line(linescore, away_name, home_name)
+        score = self._score_line(linescore, away_abbr, home_abbr)
 
         # Current pitcher from linescore defense
         defense = linescore.get("defense", {})
@@ -610,8 +605,8 @@ class MarinersBot:
         inning: int,
         half: str,
         linescore: dict[str, Any],
-        away_name: str,
-        home_name: str,
+        away_abbr: str,
+        home_abbr: str,
     ) -> str:
         """Build the end-of-inning summary posted in the group thread."""
         half_label = "Top" if half == "top" else "Bottom"
@@ -626,7 +621,7 @@ class MarinersBot:
         hits = half_data.get("hits", 0)
         errors = half_data.get("errors", 0)
 
-        score = self._score_line(linescore, away_name, home_name)
+        score = self._score_line(linescore, away_abbr, home_abbr)
 
         return (
             f"— End of {half_label} {ordinal} —\n"
@@ -698,8 +693,8 @@ class MarinersBot:
         linescore: dict[str, Any] = feed.get("liveData", {}).get("linescore", {})
         game_data = feed.get("gameData", {})
         teams = game_data.get("teams", {})
-        away_name = teams.get("away", {}).get("teamName", "Away")
-        home_name = teams.get("home", {}).get("teamName", "Home")
+        away_abbr = teams.get("away", {}).get("abbreviation", "AWY")
+        home_abbr = teams.get("home", {}).get("abbreviation", "HME")
 
         completed_plays = [p for p in all_plays if p.get("about", {}).get("isComplete", False)]
         new_plays = sorted(
@@ -711,7 +706,7 @@ class MarinersBot:
         recent_old = sorted(old_plays, key=lambda p: p["about"]["atBatIndex"])[-10:]
 
         if new_plays:
-            await self._post_new_plays(game_id, new_plays, linescore, feed, away_name, home_name)
+            await self._post_new_plays(game_id, new_plays, linescore, away_abbr, home_abbr)
 
         await self._check_updated_plays(game_id, recent_old)
 
@@ -736,9 +731,8 @@ class MarinersBot:
         game_id: str,
         new_plays: list[dict[str, Any]],
         linescore: dict[str, Any],
-        feed: dict[str, Any],
-        away_name: str,
-        home_name: str,
+        away_abbr: str,
+        home_abbr: str,
     ) -> None:
         """For each new play: open a new inning post if needed, then post the play."""
         async with self.db_session.get_session() as session:
@@ -763,7 +757,7 @@ class MarinersBot:
                 # Post end-of-inning footer for the previous inning
                 if prev_post is not None and prev_post.group_message_id is not None:
                     footer_text = self._format_inning_footer(
-                        prev_post.inning, prev_post.half, linescore, away_name, home_name
+                        prev_post.inning, prev_post.half, linescore, away_abbr, home_abbr
                     )
                     footer_msg_id = await self.telegram_bot.post_inning_footer(
                         group_message_id=prev_post.group_message_id,
@@ -775,11 +769,10 @@ class MarinersBot:
                             repo = Repo(session)
                             await repo.update_inning_post_footer_msg_id(prev_post.id, footer_msg_id)
                             await session.commit()
-                        # Store for later editing once next channel_msg_id is known
-                        prev_post = prev_post  # updated ref carried below
+                        prev_post.footer_message_id = footer_msg_id
 
                 # Post the new inning header to the channel (and wait for group forward)
-                header_text = self._format_inning_header(play_inning, play_half, linescore, feed)
+                header_text = self._format_inning_header(play_inning, play_half, linescore, away_abbr, home_abbr)
                 channel_msg_id, group_msg_id = await self.telegram_bot.post_inning_header(
                     header_text=header_text,
                 )
@@ -808,7 +801,7 @@ class MarinersBot:
                             next_half_label = "Top" if play_half == "top" else "Bottom"
                             next_ordinal = self._ordinal(play_inning)
                             footer_text = self._format_inning_footer(
-                                prev_post.inning, prev_post.half, linescore, away_name, home_name
+                                prev_post.inning, prev_post.half, linescore, away_abbr, home_abbr
                             )
                             updated_footer = (
                                 f"{footer_text}\n"

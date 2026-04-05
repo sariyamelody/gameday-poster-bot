@@ -62,3 +62,8 @@ Metrics instruments are defined in `observability.py:create_app_metrics()` but n
 | `OTEL_TRACES_EXPORTER` | No | `none`, `console`, or `otlp` (default: `none`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP endpoint URL (e.g. Honeycomb) |
 | `OTEL_EXPORTER_OTLP_HEADERS` | No | Auth headers for OTLP (e.g. `x-honeycomb-team=...`) |
+| `PLAYBYPLAY_CHANNEL_ID` | No | Telegram channel ID where per-inning header posts are sent; feature is inert when unset |
+| `PLAYBYPLAY_GROUP_ID` | No | Linked discussion group ID where play-by-play replies are threaded under channel posts |
+| `PLAYBYPLAY_CHANNEL_USERNAME` | No | Public `@username` of the channel, used to build `t.me/` deep links (falls back to numeric ID for private channels) |
+| `PLAYBYPLAY_POLL_INTERVAL` | No | Seconds between MLB live feed polls during active games (default: `20`) |
+| `PLAYBYPLAY_RETENTION_HOURS` | No | Hours to retain play-by-play DB data after a game ends before cleanup deletes it (default: `72`) |
