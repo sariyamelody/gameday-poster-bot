@@ -163,3 +163,10 @@ ignore_missing_imports = true
 [tool.bandit]
 exclude_dirs = [".venv", "tests"]
 skips = ["B101", "B104", "B105", "B106", "B404", "B601", "B602", "B603", "B607", "B701"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.1.0",
+    "ruff>=0.12.12",
+]

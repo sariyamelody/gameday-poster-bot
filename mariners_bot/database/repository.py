@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy import and_, delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Game, NotificationJob, Transaction, User, UserTransactionPreferences
@@ -703,7 +704,7 @@ class Repository:
         channel_message_id: int | None,
         group_message_id: int | None,
     ) -> InningPostRecord:
-        """Insert a new inning post record."""
+        """Insert a new inning post record, returning the existing one if already created."""
         try:
             record = InningPostRecord(
                 game_id=game_id,
@@ -715,6 +716,25 @@ class Repository:
             self.session.add(record)
             await self.session.flush()
             return record
+        except IntegrityError:
+            await self.session.rollback()
+            result = await self.session.execute(
+                select(InningPostRecord).where(
+                    and_(
+                        InningPostRecord.game_id == game_id,
+                        InningPostRecord.inning == inning,
+                        InningPostRecord.half == half,
+                    )
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                logger.warning(
+                    "Inning post already exists, reusing existing record",
+                    game_id=game_id, inning=inning, half=half,
+                )
+                return existing
+            raise
         except Exception as e:
             logger.error("Failed to create inning post", game_id=game_id, error=str(e))
             raise
@@ -775,7 +795,7 @@ class Repository:
         description: str,
         event: str,
     ) -> PlayMessageRecord:
-        """Insert a new play message record."""
+        """Insert a new play message record, returning the existing one if already saved."""
         try:
             record = PlayMessageRecord(
                 game_id=game_id,
@@ -787,6 +807,24 @@ class Repository:
             self.session.add(record)
             await self.session.flush()
             return record
+        except IntegrityError:
+            await self.session.rollback()
+            result = await self.session.execute(
+                select(PlayMessageRecord).where(
+                    and_(
+                        PlayMessageRecord.game_id == game_id,
+                        PlayMessageRecord.at_bat_index == at_bat_index,
+                    )
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                logger.warning(
+                    "Play message already exists, skipping duplicate save",
+                    game_id=game_id, at_bat_index=at_bat_index,
+                )
+                return existing
+            raise
         except Exception as e:
             logger.error("Failed to save play message", game_id=game_id, at_bat_index=at_bat_index, error=str(e))
             raise

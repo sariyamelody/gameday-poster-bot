@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import pytz
 import structlog
 from apscheduler.executors.asyncio import AsyncIOExecutor
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -95,7 +95,7 @@ class GameScheduler:
 
         # Configure job store
         jobstores = {
-            'default': SQLAlchemyJobStore(url=settings.database_url, tablename='apscheduler_jobs')
+            'default': MemoryJobStore()
         }
 
         # Configure executors
