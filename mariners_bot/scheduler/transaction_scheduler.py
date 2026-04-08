@@ -5,7 +5,7 @@ from datetime import datetime
 
 import structlog
 from apscheduler.executors.asyncio import AsyncIOExecutor
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -37,9 +37,9 @@ class TransactionScheduler:
         """Initialize the transaction scheduler."""
         self.settings = settings
 
-        # Configure job store (reuse the same database)
+        # Configure job store
         jobstores = {
-            'default': SQLAlchemyJobStore(url=settings.database_url, tablename='apscheduler_jobs')
+            'default': MemoryJobStore()
         }
 
         # Configure executors

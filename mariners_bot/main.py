@@ -9,7 +9,7 @@ from typing import Any
 import click
 import structlog
 import uvloop
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 
 from .api.server import HealthServer
 from .bot import TelegramBot
@@ -635,13 +635,19 @@ class MarinersBot:
             return
 
         try:
-            # Games notified but not yet final, within a 6-hour window
-            cutoff = datetime.now(UTC) - timedelta(hours=6)
+            # Games that are in-progress or notified but not yet final, within a 6-hour window.
+            # Include games whose start time has passed even if the pre-game notification was
+            # missed (e.g. bot was down), so PBP still fires for in-progress games.
+            now = datetime.now(UTC)
+            cutoff = now - timedelta(hours=6)
             async with self.db_session.get_session() as session:
                 result = await session.execute(
                     select(GameRecord).where(
                         and_(
-                            GameRecord.notification_sent == True,  # noqa: E712
+                            or_(
+                                GameRecord.notification_sent == True,  # noqa: E712
+                                GameRecord.date <= now,
+                            ),
                             GameRecord.final_score_sent == False,  # noqa: E712
                             GameRecord.date >= cutoff,
                         )
@@ -705,26 +711,29 @@ class MarinersBot:
         # Only check recent plays for scorer corrections
         recent_old = sorted(old_plays, key=lambda p: p["about"]["atBatIndex"])[-10:]
 
+        committed_index = last_play_index
         if new_plays:
-            await self._post_new_plays(game_id, new_plays, linescore, away_abbr, home_abbr)
+            committed_index = await self._post_new_plays(
+                game_id, new_plays, linescore, away_abbr, home_abbr, last_play_index
+            )
 
-        await self._check_updated_plays(game_id, recent_old)
-
-        new_last_index = max((p["about"]["atBatIndex"] for p in new_plays), default=last_play_index)
+        # Checkpoint progress before corrections check so a failure there doesn't
+        # cause already-posted plays to be retried on the next poll.
         now = datetime.now(UTC)
-
         async with self.db_session.get_session() as session:
             from .database import Repository as Repo
             repo = Repo(session)
             await repo.update_playbyplay_session(
                 game_id=game_id,
-                last_play_index=new_last_index,
+                last_play_index=committed_index,
                 last_poll_at=now,
             )
             if game_state == "Final":
                 await repo.deactivate_playbyplay_session(game_id=game_id, finished_at=now)
                 logger.info("Play-by-play session complete", game_id=game_id)
             await session.commit()
+
+        await self._check_updated_plays(game_id, recent_old)
 
     async def _post_new_plays(
         self,
@@ -733,12 +742,19 @@ class MarinersBot:
         linescore: dict[str, Any],
         away_abbr: str,
         home_abbr: str,
-    ) -> None:
-        """For each new play: open a new inning post if needed, then post the play."""
+        last_play_index: int,
+    ) -> int:
+        """For each new play: open a new inning post if needed, then post the play.
+
+        Returns the highest at_bat_index that was successfully committed to the DB,
+        or last_play_index if no plays were committed.
+        """
         async with self.db_session.get_session() as session:
             from .database import Repository as Repo
             repo = Repo(session)
             current_post = await repo.get_current_inning_post(game_id)
+
+        committed_index = last_play_index
 
         for play in new_plays:
             about = play.get("about", {})
@@ -746,96 +762,107 @@ class MarinersBot:
             play_half = about.get("halfInning", "top")
             at_bat_index = about.get("atBatIndex", -1)
 
-            # Open a new inning post when the inning or half changes
-            if (
-                current_post is None
-                or current_post.inning != play_inning
-                or current_post.half != play_half
-            ):
-                prev_post = current_post
+            try:
+                # Open a new inning post when the inning or half changes
+                if (
+                    current_post is None
+                    or current_post.inning != play_inning
+                    or current_post.half != play_half
+                ):
+                    prev_post = current_post
 
-                # Post end-of-inning footer for the previous inning
-                if prev_post is not None and prev_post.group_message_id is not None:
-                    footer_text = self._format_inning_footer(
-                        prev_post.inning, prev_post.half, linescore, away_abbr, home_abbr
-                    )
-                    footer_msg_id = await self.telegram_bot.post_inning_footer(
-                        group_message_id=prev_post.group_message_id,
-                        text=footer_text,
-                    )
-                    if footer_msg_id:
-                        async with self.db_session.get_session() as session:
-                            from .database import Repository as Repo
-                            repo = Repo(session)
-                            await repo.update_inning_post_footer_msg_id(prev_post.id, footer_msg_id)
-                            await session.commit()
-                        prev_post.footer_message_id = footer_msg_id
+                    # Post end-of-inning footer for the previous inning
+                    if prev_post is not None and prev_post.group_message_id is not None:
+                        footer_text = self._format_inning_footer(
+                            prev_post.inning, prev_post.half, linescore, away_abbr, home_abbr
+                        )
+                        footer_msg_id = await self.telegram_bot.post_inning_footer(
+                            group_message_id=prev_post.group_message_id,
+                            text=footer_text,
+                        )
+                        if footer_msg_id:
+                            async with self.db_session.get_session() as session:
+                                from .database import Repository as Repo
+                                repo = Repo(session)
+                                await repo.update_inning_post_footer_msg_id(prev_post.id, footer_msg_id)
+                                await session.commit()
+                            prev_post.footer_message_id = footer_msg_id
 
-                # Post the new inning header to the channel (and wait for group forward)
-                header_text = self._format_inning_header(play_inning, play_half, linescore, away_abbr, home_abbr)
-                channel_msg_id, group_msg_id = await self.telegram_bot.post_inning_header(
-                    header_text=header_text,
-                )
-
-                async with self.db_session.get_session() as session:
-                    from .database import Repository as Repo
-                    repo = Repo(session)
-                    new_post = await repo.create_inning_post(
-                        game_id=game_id,
-                        inning=play_inning,
-                        half=play_half,
-                        channel_message_id=channel_msg_id,
-                        group_message_id=group_msg_id,
+                    # Post the new inning header to the channel (and wait for group forward)
+                    header_text = self._format_inning_header(play_inning, play_half, linescore, away_abbr, home_abbr)
+                    channel_msg_id, group_msg_id = await self.telegram_bot.post_inning_header(
+                        header_text=header_text,
                     )
 
-                    # If prev inning's footer exists and we now have a channel URL,
-                    # edit it to append the next-inning link.
-                    if (
-                        prev_post is not None
-                        and prev_post.footer_message_id is not None
-                        and prev_post.group_message_id is not None
-                        and channel_msg_id is not None
-                    ):
-                        next_url = self.telegram_bot._make_channel_post_url(channel_msg_id)
-                        if next_url:
-                            next_half_label = "Top" if play_half == "top" else "Bottom"
-                            next_ordinal = self._ordinal(play_inning)
-                            footer_text = self._format_inning_footer(
-                                prev_post.inning, prev_post.half, linescore, away_abbr, home_abbr
-                            )
-                            updated_footer = (
-                                f"{footer_text}\n"
-                                f'⬇️ <a href="{next_url}">{next_half_label} of the {next_ordinal} →</a>'
-                            )
-                            await self.telegram_bot.update_inning_footer_text(
-                                footer_message_id=prev_post.footer_message_id,
-                                new_text=updated_footer,
-                            )
-
-                    await session.commit()
-
-                current_post = new_post
-
-            # Post the play to the group thread
-            if current_post is not None and current_post.group_message_id is not None:
-                play_text = self._format_play(play)
-                group_play_msg_id = await self.telegram_bot.post_play(
-                    group_message_id=current_post.group_message_id,
-                    text=play_text,
-                )
-                if group_play_msg_id:
-                    result_data = play.get("result", {})
                     async with self.db_session.get_session() as session:
                         from .database import Repository as Repo
                         repo = Repo(session)
-                        await repo.save_play_message(
+                        new_post = await repo.create_inning_post(
                             game_id=game_id,
-                            at_bat_index=at_bat_index,
-                            group_message_id=group_play_msg_id,
-                            description=result_data.get("description", ""),
-                            event=result_data.get("event", ""),
+                            inning=play_inning,
+                            half=play_half,
+                            channel_message_id=channel_msg_id,
+                            group_message_id=group_msg_id,
                         )
+
+                        # If prev inning's footer exists and we now have a channel URL,
+                        # edit it to append the next-inning link.
+                        if (
+                            prev_post is not None
+                            and prev_post.footer_message_id is not None
+                            and prev_post.group_message_id is not None
+                            and channel_msg_id is not None
+                        ):
+                            next_url = self.telegram_bot._make_channel_post_url(channel_msg_id)
+                            if next_url:
+                                next_half_label = "Top" if play_half == "top" else "Bottom"
+                                next_ordinal = self._ordinal(play_inning)
+                                footer_text = self._format_inning_footer(
+                                    prev_post.inning, prev_post.half, linescore, away_abbr, home_abbr
+                                )
+                                updated_footer = (
+                                    f"{footer_text}\n"
+                                    f'⬇️ <a href="{next_url}">{next_half_label} of the {next_ordinal} →</a>'
+                                )
+                                await self.telegram_bot.update_inning_footer_text(
+                                    footer_message_id=prev_post.footer_message_id,
+                                    new_text=updated_footer,
+                                )
+
                         await session.commit()
+
+                    current_post = new_post
+
+                # Post the play to the group thread
+                if current_post is not None and current_post.group_message_id is not None:
+                    play_text = self._format_play(play)
+                    group_play_msg_id = await self.telegram_bot.post_play(
+                        group_message_id=current_post.group_message_id,
+                        text=play_text,
+                    )
+                    if group_play_msg_id:
+                        result_data = play.get("result", {})
+                        async with self.db_session.get_session() as session:
+                            from .database import Repository as Repo
+                            repo = Repo(session)
+                            await repo.save_play_message(
+                                game_id=game_id,
+                                at_bat_index=at_bat_index,
+                                group_message_id=group_play_msg_id,
+                                description=result_data.get("description", ""),
+                                event=result_data.get("event", ""),
+                            )
+                            await session.commit()
+
+                committed_index = at_bat_index
+
+            except Exception as e:
+                logger.error(
+                    "Failed to process play, skipping",
+                    game_id=game_id, at_bat_index=at_bat_index, error=str(e),
+                )
+
+        return committed_index
 
     async def _check_updated_plays(
         self, game_id: str, plays_from_feed: list[dict[str, Any]]
