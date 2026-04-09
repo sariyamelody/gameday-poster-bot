@@ -97,6 +97,7 @@ class TelegramBot:
             if success:
                 job.mark_sent()
                 logger.info("Notification sent successfully", job_id=job.job_id, chat_id=chat_id)
+                await self._mark_game_notified(job.game_id)
             else:
                 job.mark_failed("Failed to send after retries")
                 logger.error("Failed to send notification", job_id=job.job_id)
@@ -650,6 +651,16 @@ class TelegramBot:
         except Exception as e:
             logger.error("Failed to save user", chat_id=user.chat_id, error=str(e))
             raise
+
+    async def _mark_game_notified(self, game_id: str) -> None:
+        """Mark a game's pre-game notification as sent in the database."""
+        try:
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+                await repository.mark_game_notified(game_id)
+
+        except Exception as e:
+            logger.error("Failed to mark game as notified", game_id=game_id, error=str(e))
 
     async def _save_notification_job(self, job: NotificationJob) -> None:
         """Save notification job to database."""
