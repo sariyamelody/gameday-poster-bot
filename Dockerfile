@@ -1,5 +1,5 @@
 # Single stage build
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Create non-root user with same UID/GID as host user (1000:1000)
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g 1000 -m appuser
