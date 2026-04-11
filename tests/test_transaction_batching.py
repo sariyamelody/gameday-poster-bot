@@ -1,6 +1,6 @@
 """Tests for transaction batching functionality."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from mariners_bot.models.transaction import Transaction
 from mariners_bot.scheduler.transaction_scheduler import TransactionNotificationBatcher
@@ -191,7 +191,7 @@ class TestTransactionNotificationBatcher:
         self.batcher.add_transaction_to_batch(self.chat_id, transaction)
 
         # Mark that we sent a notification a while ago (to trigger batch send)
-        old_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        old_time = datetime.now() - timedelta(minutes=self.batcher.batch_window_minutes + 1)
         self.batcher.last_notification_time[self.chat_id] = old_time
 
         users = self.batcher.get_users_with_pending_batches()
