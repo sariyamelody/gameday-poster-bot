@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 import structlog
 
 from ..clients import BlueskyClient
+from ..clients.bluesky_client import SalmonRunPost
 from ..config import Settings
 
 logger = structlog.get_logger(__name__)
@@ -27,7 +28,7 @@ class SalmonRunMonitor:
     def __init__(
         self,
         settings: Settings,
-        on_result: Callable[[str], Awaitable[None]],
+        on_result: Callable[[SalmonRunPost], Awaitable[None]],
     ) -> None:
         self.settings = settings
         self._on_result = on_result
@@ -99,11 +100,11 @@ class SalmonRunMonitor:
                             handle=self.settings.salmon_run_bsky_handle,
                             seen_uris=self._seen_uris,
                         )
-                        for uri, text in posts:
-                            self._seen_uris.add(uri)
-                            await self._on_result(text)
+                        for post in posts:
+                            self._seen_uris.add(post.uri)
+                            await self._on_result(post)
                             self._posted = True
-                            logger.info("Salmon Run result posted", uri=uri)
+                            logger.info("Salmon Run result posted", uri=post.uri)
                         if self._posted:
                             return
                     except Exception as e:

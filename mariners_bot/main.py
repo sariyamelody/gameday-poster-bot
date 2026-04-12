@@ -4,7 +4,10 @@ import asyncio
 import signal
 import sys
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .clients.bluesky_client import SalmonRunPost
 
 import click
 import structlog
@@ -919,9 +922,10 @@ class MarinersBot:
 
             await session.commit()
 
-    async def _post_salmon_run_result(self, text: str) -> None:
+    async def _post_salmon_run_result(self, post: "SalmonRunPost") -> None:
         """Send a Salmon Run result to the main channel and the PBP channel."""
-        message = f"🐟 <b>Salmon Run</b>\n{text}"
+        credit = f'<a href="{post.web_url}">via {post.author_display_name} on Bluesky</a>'
+        message = f"🐟 <b>Salmon Run</b>\n{post.text}\n\n{credit}"
         destinations: list[str] = []
         if self.settings.telegram_chat_id:
             destinations.append(self.settings.telegram_chat_id)
@@ -932,7 +936,10 @@ class MarinersBot:
             destinations.append(self.settings.playbyplay_channel_id)
 
         for chat_id in destinations:
-            await self.telegram_bot.send_to_chat(chat_id, message)
+            if post.thumbnail_url:
+                await self.telegram_bot.send_photo_to_chat(chat_id, post.thumbnail_url, message)
+            else:
+                await self.telegram_bot.send_to_chat(chat_id, message)
 
     async def _cleanup_playbyplay_data(self) -> None:
         """Delete play-by-play data for finished sessions past the retention window."""

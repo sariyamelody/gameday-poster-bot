@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mariners_bot.clients.bluesky_client import BlueskyClient
+from mariners_bot.clients.bluesky_client import BlueskyClient, SalmonRunPost, _extract_thumbnail
 from mariners_bot.config import Settings
 from mariners_bot.scheduler.salmon_run_monitor import SalmonRunMonitor
 
@@ -16,14 +16,80 @@ def make_feed(*posts: dict[str, Any]) -> dict[str, Any]:
     """Build a fake Bluesky getAuthorFeed response (newest-first, like the real API)."""
     return {
         "feed": [
-            {"post": {"uri": p["uri"], "record": {"text": p["text"]}}}
+            {
+                "post": {
+                    "uri": p["uri"],
+                    "record": {"text": p["text"]},
+                    "author": {
+                        "handle": p.get("handle", "test.bsky.social"),
+                        "displayName": p.get("display_name", "Test Account"),
+                    },
+                    "embed": p.get("embed", {}),
+                }
+            }
             for p in posts
         ]
     }
 
 
+def make_post(**kwargs: Any) -> SalmonRunPost:
+    return SalmonRunPost(
+        uri=kwargs.get("uri", "at://did:plc:abc/app.bsky.feed.post/rkey123"),
+        text=kwargs.get("text", "Humpy wins! #SalmonRun"),
+        author_handle=kwargs.get("author_handle", "circlingseasports.bsky.social"),
+        author_display_name=kwargs.get("author_display_name", "Circling Seattle Sports"),
+        thumbnail_url=kwargs.get("thumbnail_url", None),
+    )
+
+
 def settings() -> Settings:
     return Settings(telegram_bot_token="test")
+
+
+# ---------------------------------------------------------------------------
+# SalmonRunPost
+# ---------------------------------------------------------------------------
+
+class TestSalmonRunPost:
+    def test_web_url_builds_from_uri(self) -> None:
+        post = make_post(
+            uri="at://did:plc:abc/app.bsky.feed.post/rkey123",
+            author_handle="circlingseasports.bsky.social",
+        )
+        assert post.web_url == "https://bsky.app/profile/circlingseasports.bsky.social/post/rkey123"
+
+
+# ---------------------------------------------------------------------------
+# _extract_thumbnail
+# ---------------------------------------------------------------------------
+
+class TestExtractThumbnail:
+    def test_video_embed(self) -> None:
+        embed = {
+            "$type": "app.bsky.embed.video#view",
+            "thumbnail": "https://video.bsky.app/thumbnail.jpg",
+        }
+        assert _extract_thumbnail(embed) == "https://video.bsky.app/thumbnail.jpg"
+
+    def test_images_embed(self) -> None:
+        embed = {
+            "$type": "app.bsky.embed.images#view",
+            "images": [{"thumb": "https://cdn.bsky.app/thumb.jpg"}],
+        }
+        assert _extract_thumbnail(embed) == "https://cdn.bsky.app/thumb.jpg"
+
+    def test_images_embed_falls_back_to_fullsize(self) -> None:
+        embed = {
+            "$type": "app.bsky.embed.images#view",
+            "images": [{"fullsize": "https://cdn.bsky.app/full.jpg"}],
+        }
+        assert _extract_thumbnail(embed) == "https://cdn.bsky.app/full.jpg"
+
+    def test_unknown_embed_type(self) -> None:
+        assert _extract_thumbnail({"$type": "app.bsky.embed.record#view"}) is None
+
+    def test_empty_embed(self) -> None:
+        assert _extract_thumbnail({}) is None
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +99,7 @@ def settings() -> Settings:
 class TestBlueskyClient:
     async def _fetch(
         self, feed: dict[str, Any], seen: set[str] | None = None
-    ) -> list[tuple[str, str]]:
+    ) -> list[SalmonRunPost]:
         """Helper: run get_new_salmon_run_posts with a mocked HTTP response."""
         mock_resp = AsyncMock()
         mock_resp.status = 200
@@ -56,7 +122,9 @@ class TestBlueskyClient:
             {"uri": "at://2", "text": "Game recap here."},
         )
         results = await self._fetch(feed)
-        assert results == [("at://1", "Sockeye wins tonight. #SalmonRun")]
+        assert len(results) == 1
+        assert results[0].uri == "at://1"
+        assert results[0].text == "Sockeye wins tonight. #SalmonRun"
 
     @pytest.mark.asyncio
     async def test_filters_non_salmon_posts(self) -> None:
@@ -80,7 +148,7 @@ class TestBlueskyClient:
             {"uri": "at://2", "text": "Sockeye wins! #SalmonRun"},
         )
         results = await self._fetch(feed, seen={"at://1"})
-        assert [uri for uri, _ in results] == ["at://2"]
+        assert [p.uri for p in results] == ["at://2"]
 
     @pytest.mark.asyncio
     async def test_returns_chronological_order(self) -> None:
@@ -90,7 +158,38 @@ class TestBlueskyClient:
             {"uri": "at://older", "text": "Silver wins! #SalmonRun"},
         )
         results = await self._fetch(feed)
-        assert [uri for uri, _ in results] == ["at://older", "at://newer"]
+        assert [p.uri for p in results] == ["at://older", "at://newer"]
+
+    @pytest.mark.asyncio
+    async def test_populates_author_fields(self) -> None:
+        feed = make_feed({
+            "uri": "at://1",
+            "text": "Humpy wins! #SalmonRun",
+            "handle": "circlingseasports.bsky.social",
+            "display_name": "Circling Seattle Sports",
+        })
+        results = await self._fetch(feed)
+        assert results[0].author_handle == "circlingseasports.bsky.social"
+        assert results[0].author_display_name == "Circling Seattle Sports"
+
+    @pytest.mark.asyncio
+    async def test_extracts_video_thumbnail(self) -> None:
+        feed = make_feed({
+            "uri": "at://1",
+            "text": "Sockeye wins! #SalmonRun",
+            "embed": {
+                "$type": "app.bsky.embed.video#view",
+                "thumbnail": "https://video.bsky.app/thumb.jpg",
+            },
+        })
+        results = await self._fetch(feed)
+        assert results[0].thumbnail_url == "https://video.bsky.app/thumb.jpg"
+
+    @pytest.mark.asyncio
+    async def test_thumbnail_none_when_no_embed(self) -> None:
+        feed = make_feed({"uri": "at://1", "text": "Silver wins! #SalmonRun"})
+        results = await self._fetch(feed)
+        assert results[0].thumbnail_url is None
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_non_200(self) -> None:
@@ -125,7 +224,7 @@ class TestBlueskyClient:
 # ---------------------------------------------------------------------------
 
 def make_monitor(
-    on_result: Callable[[str], Awaitable[None]] | None = None,
+    on_result: Callable[[SalmonRunPost], Awaitable[None]] | None = None,
 ) -> SalmonRunMonitor:
     if on_result is None:
         on_result = AsyncMock()
@@ -228,18 +327,18 @@ class TestSalmonRunMonitor:
         monitor = make_monitor(on_result=on_result)
         monitor._game_id = "game1"
 
-        posts = [("at://1", "Humpy wins! #SalmonRun")]
+        post = make_post()
         mock_bsky = AsyncMock()
-        mock_bsky.get_new_salmon_run_posts = AsyncMock(return_value=posts)
+        mock_bsky.get_new_salmon_run_posts = AsyncMock(return_value=[post])
         mock_bsky.__aenter__ = AsyncMock(return_value=mock_bsky)
         mock_bsky.__aexit__ = AsyncMock(return_value=False)
 
         with patch("mariners_bot.scheduler.salmon_run_monitor.BlueskyClient", return_value=mock_bsky):
             await monitor._poll_loop()
 
-        on_result.assert_awaited_once_with("Humpy wins! #SalmonRun")
+        on_result.assert_awaited_once_with(post)
         assert monitor._posted is True
-        assert "at://1" in monitor._seen_uris
+        assert post.uri in monitor._seen_uris
 
     @pytest.mark.asyncio
     async def test_poll_loop_handles_cancellation(self) -> None:
@@ -261,12 +360,12 @@ class TestSalmonRunMonitor:
 
         call_count = 0
 
-        async def flaky_fetch(**_: Any) -> list[tuple[str, str]]:
+        async def flaky_fetch(**_: Any) -> list[SalmonRunPost]:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise OSError("timeout")
-            return [("at://1", "King wins! #SalmonRun")]
+            return [make_post()]
 
         mock_bsky = AsyncMock()
         mock_bsky.get_new_salmon_run_posts = flaky_fetch

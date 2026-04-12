@@ -117,6 +117,24 @@ class TelegramBot:
         """Send an HTML message to a specific chat/channel ID."""
         return await self._send_message_with_retry(chat_id=chat_id, message=message)
 
+    async def send_photo_to_chat(self, chat_id: str, photo_url: str, caption: str) -> bool:
+        """Send a photo with an HTML caption; falls back to plain text on error."""
+        try:
+            await self.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_url,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+        except TelegramError as e:
+            logger.warning(
+                "Failed to send photo, falling back to text",
+                chat_id=chat_id,
+                error=str(e),
+            )
+            return await self._send_message_with_retry(chat_id=chat_id, message=caption)
+
     async def send_message_to_all_subscribers(self, message: str) -> int:
         """Send a message to all subscribed users."""
         sent_count = 0
