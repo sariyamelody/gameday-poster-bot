@@ -591,9 +591,11 @@ class MarinersBot:
         is_scoring = play.get("about", {}).get("isScoringPlay", False)
         away_score = result.get("awayScore")
         home_score = result.get("homeScore")
+        outs = play.get("count", {}).get("outs", 0)
 
         emoji = self._PLAY_EMOJIS.get(event, "⚾")
-        text = f"{emoji} {description}"
+        out_dots = "●" * outs + "○" * (3 - outs)
+        text = f"{emoji} {description} {out_dots}"
 
         if is_scoring and away_score is not None and home_score is not None:
             text += f"\n<b>{away_score}–{home_score}</b>"
