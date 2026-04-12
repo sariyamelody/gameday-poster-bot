@@ -33,11 +33,11 @@ def _extract_thumbnail(embed: dict[str, Any]) -> str | None:
     """Return a thumbnail/image URL from a post embed, or None."""
     embed_type = embed.get("$type", "")
     if embed_type == "app.bsky.embed.video#view":
-        return embed.get("thumbnail") or None  # type: ignore[return-value]
+        return embed.get("thumbnail") or None
     if embed_type == "app.bsky.embed.images#view":
         images = embed.get("images", [])
         if images:
-            return images[0].get("thumb") or images[0].get("fullsize") or None  # type: ignore[return-value]
+            return images[0].get("thumb") or images[0].get("fullsize") or None
     return None
 
 
