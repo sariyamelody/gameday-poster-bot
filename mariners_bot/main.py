@@ -4,7 +4,10 @@ import asyncio
 import signal
 import sys
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .clients.bluesky_client import SalmonRunPost
 
 import click
 import structlog
@@ -20,6 +23,7 @@ from .database.models import GameRecord
 from .models import Game, Transaction
 from .observability import setup_telemetry, shutdown_telemetry
 from .scheduler import GameScheduler
+from .scheduler.salmon_run_monitor import SalmonRunMonitor
 from .scheduler.transaction_scheduler import TransactionNotificationBatcher, TransactionScheduler
 
 # Setup structured logging
@@ -66,6 +70,11 @@ class MarinersBot:
         self.scheduler.set_schedule_sync_callback(self._sync_schedule)
         self.scheduler.set_final_score_callback(self._check_final_scores)
         self.transaction_scheduler.set_transaction_sync_callback(self._sync_transactions)
+
+        # Salmon Run monitor (polls Bluesky between innings at home games)
+        self.salmon_run_monitor = SalmonRunMonitor(
+            self.settings, on_result=self._post_salmon_run_result
+        )
 
         # Play-by-play callbacks (only wired when channel is configured)
         if self.settings.playbyplay_channel_id and self.settings.playbyplay_group_id:
@@ -167,6 +176,8 @@ class MarinersBot:
         logger.info("Stopping Mariners bot")
 
         self.running = False
+
+        self.salmon_run_monitor.stop()
 
         try:
             # Stop Telegram bot
@@ -703,6 +714,7 @@ class MarinersBot:
         teams = game_data.get("teams", {})
         away_abbr = teams.get("away", {}).get("abbreviation", "AWY")
         home_abbr = teams.get("home", {}).get("abbreviation", "HME")
+        is_home_game = teams.get("home", {}).get("id") == self.settings.mariners_team_id
 
         completed_plays = [p for p in all_plays if p.get("about", {}).get("isComplete", False)]
         new_plays = sorted(
@@ -716,7 +728,7 @@ class MarinersBot:
         committed_index = last_play_index
         if new_plays:
             committed_index = await self._post_new_plays(
-                game_id, new_plays, linescore, away_abbr, home_abbr, last_play_index
+                game_id, new_plays, linescore, away_abbr, home_abbr, last_play_index, is_home_game
             )
 
         # Checkpoint progress before corrections check so a failure there doesn't
@@ -745,6 +757,7 @@ class MarinersBot:
         away_abbr: str,
         home_abbr: str,
         last_play_index: int,
+        is_home_game: bool = False,
     ) -> int:
         """For each new play: open a new inning post if needed, then post the play.
 
@@ -790,6 +803,9 @@ class MarinersBot:
                                 await session.commit()
                             prev_post.footer_message_id = footer_msg_id
 
+                        # Inning ended — open the Salmon Run polling window.
+                        self.salmon_run_monitor.on_inning_end(game_id, is_home_game)
+
                     # Post the new inning header to the channel (and wait for group forward)
                     header_text = self._format_inning_header(play_inning, play_half, linescore, away_abbr, home_abbr)
                     channel_msg_id, group_msg_id = await self.telegram_bot.post_inning_header(
@@ -834,6 +850,9 @@ class MarinersBot:
                         await session.commit()
 
                     current_post = new_post
+
+                    # New inning started — schedule polling to stop in 2 minutes.
+                    self.salmon_run_monitor.on_inning_start()
 
                 # Post the play to the group thread
                 if current_post is not None and current_post.group_message_id is not None:
@@ -904,6 +923,25 @@ class MarinersBot:
                     )
 
             await session.commit()
+
+    async def _post_salmon_run_result(self, post: "SalmonRunPost") -> None:
+        """Send a Salmon Run result to the main channel and the PBP channel."""
+        credit = f'<a href="{post.web_url}">via {post.author_display_name} on Bluesky</a>'
+        message = f"🐟 <b>Salmon Run</b>\n{post.text}\n\n{credit}"
+        destinations: list[str] = []
+        if self.settings.telegram_chat_id:
+            destinations.append(self.settings.telegram_chat_id)
+        if (
+            self.settings.playbyplay_channel_id
+            and self.settings.playbyplay_channel_id not in destinations
+        ):
+            destinations.append(self.settings.playbyplay_channel_id)
+
+        for chat_id in destinations:
+            if post.thumbnail_url:
+                await self.telegram_bot.send_photo_to_chat(chat_id, post.thumbnail_url, message)
+            else:
+                await self.telegram_bot.send_to_chat(chat_id, message)
 
     async def _cleanup_playbyplay_data(self) -> None:
         """Delete play-by-play data for finished sessions past the retention window."""

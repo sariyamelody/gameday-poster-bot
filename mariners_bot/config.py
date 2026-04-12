@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     playbyplay_poll_interval: int = Field(default=20)             # Seconds between live feed polls
     playbyplay_retention_hours: int = Field(default=72)           # Hours to keep data after game ends
 
+    # Salmon Run Bluesky source
+    salmon_run_bsky_handle: str = Field(default="circlingseasports.bsky.social")
+    salmon_run_poll_interval: int = Field(default=15)  # Seconds between Bluesky polls
+
     # Application Configuration
     debug: bool = Field(default=False)
     environment: str = Field(default="production")
