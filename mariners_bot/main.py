@@ -13,13 +13,14 @@ from sqlalchemy import and_, or_, select
 
 from .api.server import HealthServer
 from .bot import TelegramBot
-from .clients import BlueskyClient, MLBClient
+from .clients import MLBClient
 from .config import get_settings
 from .database import Repository, get_database_session
 from .database.models import GameRecord
 from .models import Game, Transaction
 from .observability import setup_telemetry, shutdown_telemetry
 from .scheduler import GameScheduler
+from .scheduler.salmon_run_monitor import SalmonRunMonitor
 from .scheduler.transaction_scheduler import TransactionNotificationBatcher, TransactionScheduler
 
 # Setup structured logging
@@ -67,12 +68,10 @@ class MarinersBot:
         self.scheduler.set_final_score_callback(self._check_final_scores)
         self.transaction_scheduler.set_transaction_sync_callback(self._sync_transactions)
 
-        # Salmon Run Bluesky polling state (in-memory, per-game)
-        self._salmon_run_task: asyncio.Task[None] | None = None
-        self._salmon_run_stop_handle: asyncio.TimerHandle | None = None
-        self._salmon_run_game_id: str | None = None
-        self._salmon_run_posted: bool = False
-        self._salmon_run_seen_uris: set[str] = set()
+        # Salmon Run monitor (polls Bluesky between innings at home games)
+        self.salmon_run_monitor = SalmonRunMonitor(
+            self.settings, on_result=self._post_salmon_run_result
+        )
 
         # Play-by-play callbacks (only wired when channel is configured)
         if self.settings.playbyplay_channel_id and self.settings.playbyplay_group_id:
@@ -175,11 +174,7 @@ class MarinersBot:
 
         self.running = False
 
-        # Cancel any in-flight salmon run polling
-        if self._salmon_run_stop_handle:
-            self._salmon_run_stop_handle.cancel()
-        if self._salmon_run_task and not self._salmon_run_task.done():
-            self._salmon_run_task.cancel()
+        self.salmon_run_monitor.stop()
 
         try:
             # Stop Telegram bot
@@ -804,7 +799,7 @@ class MarinersBot:
                             prev_post.footer_message_id = footer_msg_id
 
                         # Inning ended — open the Salmon Run polling window.
-                        self._start_salmon_run_polling(game_id, is_home_game)
+                        self.salmon_run_monitor.on_inning_end(game_id, is_home_game)
 
                     # Post the new inning header to the channel (and wait for group forward)
                     header_text = self._format_inning_header(play_inning, play_half, linescore, away_abbr, home_abbr)
@@ -852,7 +847,7 @@ class MarinersBot:
                     current_post = new_post
 
                     # New inning started — schedule polling to stop in 2 minutes.
-                    self._schedule_salmon_run_stop()
+                    self.salmon_run_monitor.on_inning_start()
 
                 # Post the play to the group thread
                 if current_post is not None and current_post.group_message_id is not None:
@@ -923,78 +918,6 @@ class MarinersBot:
                     )
 
             await session.commit()
-
-    # ------------------------------------------------------------------
-    # Salmon Run Bluesky polling
-    # ------------------------------------------------------------------
-
-    def _start_salmon_run_polling(self, game_id: str, is_home_game: bool) -> None:
-        """Start Bluesky polling for a Salmon Run result (called on inning end).
-
-        Resets per-game state when *game_id* changes.  No-ops if the game is
-        not at home, if we already posted a result this game, or if polling is
-        already running.
-        """
-        if not is_home_game:
-            return
-
-        # Reset state when a new game begins.
-        if game_id != self._salmon_run_game_id:
-            self._salmon_run_game_id = game_id
-            self._salmon_run_posted = False
-            self._salmon_run_seen_uris = set()
-
-        if self._salmon_run_posted:
-            return
-
-        if self._salmon_run_task and not self._salmon_run_task.done():
-            return  # poll loop already running
-
-        # Cancel any pending auto-stop from a previous inning.
-        if self._salmon_run_stop_handle:
-            self._salmon_run_stop_handle.cancel()
-            self._salmon_run_stop_handle = None
-
-        self._salmon_run_task = asyncio.create_task(self._salmon_run_poll_loop())
-        logger.info("Salmon Run polling started", game_id=game_id)
-
-    def _schedule_salmon_run_stop(self) -> None:
-        """Schedule polling to stop 2 minutes from now (called on new inning start)."""
-        if self._salmon_run_stop_handle:
-            self._salmon_run_stop_handle.cancel()
-        loop = asyncio.get_event_loop()
-        self._salmon_run_stop_handle = loop.call_later(120, self._cancel_salmon_run_polling)
-
-    def _cancel_salmon_run_polling(self) -> None:
-        """Cancel the Bluesky polling task (called by the 2-minute timer)."""
-        self._salmon_run_stop_handle = None
-        if self._salmon_run_task and not self._salmon_run_task.done():
-            self._salmon_run_task.cancel()
-            logger.info("Salmon Run polling stopped (timer)")
-
-    async def _salmon_run_poll_loop(self) -> None:
-        """Poll Bluesky every SALMON_RUN_POLL_INTERVAL seconds for new results."""
-        try:
-            async with BlueskyClient() as bsky:
-                while True:
-                    try:
-                        posts = await bsky.get_new_salmon_run_posts(
-                            handle=self.settings.salmon_run_bsky_handle,
-                            seen_uris=self._salmon_run_seen_uris,
-                        )
-                        for uri, text in posts:
-                            self._salmon_run_seen_uris.add(uri)
-                            await self._post_salmon_run_result(text)
-                            self._salmon_run_posted = True
-                            logger.info("Salmon Run result posted", uri=uri)
-                        if self._salmon_run_posted:
-                            # Stop polling — we found what we came for.
-                            return
-                    except Exception as e:
-                        logger.error("Salmon Run poll error", error=str(e))
-                    await asyncio.sleep(self.settings.salmon_run_poll_interval)
-        except asyncio.CancelledError:
-            pass
 
     async def _post_salmon_run_result(self, text: str) -> None:
         """Send a Salmon Run result to the main channel and the PBP channel."""
