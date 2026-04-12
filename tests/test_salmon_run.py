@@ -1,0 +1,287 @@
+"""Tests for Salmon Run Bluesky client and monitor."""
+
+import asyncio
+from collections.abc import Awaitable, Callable
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from mariners_bot.clients.bluesky_client import BlueskyClient
+from mariners_bot.config import Settings
+from mariners_bot.scheduler.salmon_run_monitor import SalmonRunMonitor
+
+
+def make_feed(*posts: dict[str, Any]) -> dict[str, Any]:
+    """Build a fake Bluesky getAuthorFeed response (newest-first, like the real API)."""
+    return {
+        "feed": [
+            {"post": {"uri": p["uri"], "record": {"text": p["text"]}}}
+            for p in posts
+        ]
+    }
+
+
+def settings() -> Settings:
+    return Settings(telegram_bot_token="test")
+
+
+# ---------------------------------------------------------------------------
+# BlueskyClient
+# ---------------------------------------------------------------------------
+
+class TestBlueskyClient:
+    async def _fetch(
+        self, feed: dict[str, Any], seen: set[str] | None = None
+    ) -> list[tuple[str, str]]:
+        """Helper: run get_new_salmon_run_posts with a mocked HTTP response."""
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(return_value=feed)
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.close = AsyncMock()
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            async with BlueskyClient() as bsky:
+                return await bsky.get_new_salmon_run_posts("test.bsky.social", seen or set())
+
+    @pytest.mark.asyncio
+    async def test_returns_salmon_run_posts(self) -> None:
+        feed = make_feed(
+            {"uri": "at://1", "text": "Sockeye wins tonight. #SalmonRun"},
+            {"uri": "at://2", "text": "Game recap here."},
+        )
+        results = await self._fetch(feed)
+        assert results == [("at://1", "Sockeye wins tonight. #SalmonRun")]
+
+    @pytest.mark.asyncio
+    async def test_filters_non_salmon_posts(self) -> None:
+        feed = make_feed(
+            {"uri": "at://1", "text": "Silver boat wins the Hydro Challenge. #HydroChallenge"},
+            {"uri": "at://2", "text": "Mariners walk off in the 9th!"},
+        )
+        results = await self._fetch(feed)
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_matches_case_insensitively(self) -> None:
+        feed = make_feed({"uri": "at://1", "text": "King wins the salmon run tonight!"})
+        results = await self._fetch(feed)
+        assert len(results) == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_seen_uris(self) -> None:
+        feed = make_feed(
+            {"uri": "at://1", "text": "Humpy wins! #SalmonRun"},
+            {"uri": "at://2", "text": "Sockeye wins! #SalmonRun"},
+        )
+        results = await self._fetch(feed, seen={"at://1"})
+        assert [uri for uri, _ in results] == ["at://2"]
+
+    @pytest.mark.asyncio
+    async def test_returns_chronological_order(self) -> None:
+        # Feed is newest-first; results should be oldest-first (chronological).
+        feed = make_feed(
+            {"uri": "at://newer", "text": "King wins! #SalmonRun"},
+            {"uri": "at://older", "text": "Silver wins! #SalmonRun"},
+        )
+        results = await self._fetch(feed)
+        assert [uri for uri, _ in results] == ["at://older", "at://newer"]
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_non_200(self) -> None:
+        mock_resp = AsyncMock()
+        mock_resp.status = 429
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.close = AsyncMock()
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            async with BlueskyClient() as bsky:
+                results = await bsky.get_new_salmon_run_posts("test.bsky.social", set())
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_network_error(self) -> None:
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(side_effect=OSError("connection refused"))
+        mock_session.close = AsyncMock()
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            async with BlueskyClient() as bsky:
+                results = await bsky.get_new_salmon_run_posts("test.bsky.social", set())
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# SalmonRunMonitor
+# ---------------------------------------------------------------------------
+
+def make_monitor(
+    on_result: Callable[[str], Awaitable[None]] | None = None,
+) -> SalmonRunMonitor:
+    if on_result is None:
+        on_result = AsyncMock()
+    return SalmonRunMonitor(settings(), on_result=on_result)
+
+
+class TestSalmonRunMonitor:
+    def test_noop_for_road_game(self) -> None:
+        monitor = make_monitor()
+        with patch("asyncio.create_task") as mock_create:
+            monitor.on_inning_end("game1", is_home_game=False)
+            mock_create.assert_not_called()
+
+    def test_starts_task_for_home_game(self) -> None:
+        monitor = make_monitor()
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.done.return_value = False
+        # Patch _poll_loop so no unawaited coroutine is created when create_task discards it.
+        with patch.object(monitor, "_poll_loop", return_value=MagicMock()), \
+                patch("asyncio.create_task", return_value=mock_task) as mock_create:
+            monitor.on_inning_end("game1", is_home_game=True)
+            mock_create.assert_called_once()
+
+    def test_does_not_double_start(self) -> None:
+        monitor = make_monitor()
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.done.return_value = False
+        monitor._task = mock_task  # already running
+
+        with patch("asyncio.create_task") as mock_create:
+            monitor.on_inning_end("game1", is_home_game=True)
+            mock_create.assert_not_called()
+
+    def test_resets_state_on_new_game(self) -> None:
+        monitor = make_monitor()
+        monitor._game_id = "old_game"
+        monitor._posted = True
+        monitor._seen_uris = {"at://old"}
+
+        with patch.object(monitor, "_poll_loop", return_value=MagicMock()), \
+                patch("asyncio.create_task"):
+            monitor.on_inning_end("new_game", is_home_game=True)
+
+        assert monitor._game_id == "new_game"
+        assert monitor._posted is False
+        assert monitor._seen_uris == set()
+
+    def test_noop_if_already_posted_this_game(self) -> None:
+        monitor = make_monitor()
+        monitor._game_id = "game1"
+        monitor._posted = True
+
+        with patch("asyncio.create_task") as mock_create:
+            monitor.on_inning_end("game1", is_home_game=True)
+            mock_create.assert_not_called()
+
+    def test_on_inning_start_schedules_stop(self) -> None:
+        monitor = make_monitor()
+        mock_loop = MagicMock()
+        with patch("asyncio.get_event_loop", return_value=mock_loop):
+            monitor.on_inning_start()
+        mock_loop.call_later.assert_called_once_with(120, monitor._cancel)
+
+    def test_on_inning_start_replaces_existing_stop(self) -> None:
+        monitor = make_monitor()
+        old_handle = MagicMock()
+        monitor._stop_handle = old_handle
+
+        mock_loop = MagicMock()
+        with patch("asyncio.get_event_loop", return_value=mock_loop):
+            monitor.on_inning_start()
+
+        old_handle.cancel.assert_called_once()
+
+    def test_stop_cancels_task_and_handle(self) -> None:
+        monitor = make_monitor()
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.done.return_value = False
+        mock_handle = MagicMock()
+        monitor._task = mock_task
+        monitor._stop_handle = mock_handle
+
+        monitor.stop()
+
+        mock_handle.cancel.assert_called_once()
+        mock_task.cancel.assert_called_once()
+
+    def test_cancel_noop_when_task_already_done(self) -> None:
+        monitor = make_monitor()
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.done.return_value = True
+        monitor._task = mock_task
+
+        monitor._cancel()  # should not raise
+        mock_task.cancel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_poll_loop_calls_on_result_and_stops(self) -> None:
+        on_result = AsyncMock()
+        monitor = make_monitor(on_result=on_result)
+        monitor._game_id = "game1"
+
+        posts = [("at://1", "Humpy wins! #SalmonRun")]
+        mock_bsky = AsyncMock()
+        mock_bsky.get_new_salmon_run_posts = AsyncMock(return_value=posts)
+        mock_bsky.__aenter__ = AsyncMock(return_value=mock_bsky)
+        mock_bsky.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("mariners_bot.scheduler.salmon_run_monitor.BlueskyClient", return_value=mock_bsky):
+            await monitor._poll_loop()
+
+        on_result.assert_awaited_once_with("Humpy wins! #SalmonRun")
+        assert monitor._posted is True
+        assert "at://1" in monitor._seen_uris
+
+    @pytest.mark.asyncio
+    async def test_poll_loop_handles_cancellation(self) -> None:
+        monitor = make_monitor()
+
+        mock_bsky = AsyncMock()
+        mock_bsky.get_new_salmon_run_posts = AsyncMock(return_value=[])
+        mock_bsky.__aenter__ = AsyncMock(return_value=mock_bsky)
+        mock_bsky.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("mariners_bot.scheduler.salmon_run_monitor.BlueskyClient", return_value=mock_bsky):
+            with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
+                await monitor._poll_loop()  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_poll_loop_continues_on_client_error(self) -> None:
+        on_result = AsyncMock()
+        monitor = make_monitor(on_result=on_result)
+
+        call_count = 0
+
+        async def flaky_fetch(**_: Any) -> list[tuple[str, str]]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise OSError("timeout")
+            return [("at://1", "King wins! #SalmonRun")]
+
+        mock_bsky = AsyncMock()
+        mock_bsky.get_new_salmon_run_posts = flaky_fetch
+        mock_bsky.__aenter__ = AsyncMock(return_value=mock_bsky)
+        mock_bsky.__aexit__ = AsyncMock(return_value=False)
+
+        sleep_calls = 0
+
+        async def fake_sleep(_: float) -> None:
+            nonlocal sleep_calls
+            sleep_calls += 1
+
+        with patch("mariners_bot.scheduler.salmon_run_monitor.BlueskyClient", return_value=mock_bsky):
+            with patch("asyncio.sleep", side_effect=fake_sleep):
+                await monitor._poll_loop()
+
+        assert call_count == 2
+        on_result.assert_awaited_once()

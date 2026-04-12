@@ -44,7 +44,7 @@ class BlueskyClient:
         try:
             async with self.session.get(
                 _FEED_ENDPOINT,
-                params={"actor": handle, "limit": 10},
+                params={"actor": handle, "limit": 25},
             ) as resp:
                 if resp.status != 200:
                     logger.warning(
