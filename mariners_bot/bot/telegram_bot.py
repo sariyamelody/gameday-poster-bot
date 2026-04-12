@@ -113,6 +113,10 @@ class TelegramBot:
             await self._save_notification_job(job)
             return False
 
+    async def send_to_chat(self, chat_id: str, message: str) -> bool:
+        """Send an HTML message to a specific chat/channel ID."""
+        return await self._send_message_with_retry(chat_id=chat_id, message=message)
+
     async def send_message_to_all_subscribers(self, message: str) -> int:
         """Send a message to all subscribed users."""
         sent_count = 0
