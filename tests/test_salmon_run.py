@@ -272,6 +272,22 @@ class TestSalmonRunMonitor:
         assert monitor._posted is False
         assert monitor._seen_uris == set()
 
+    def test_cancels_pending_stop_when_inning_ends_early(self) -> None:
+        # If an inning finishes before the 2-minute auto-stop fires, the pending
+        # cancel must be cleared so it doesn't kill the extended polling window.
+        monitor = make_monitor()
+        pending_stop = MagicMock()
+        monitor._stop_handle = pending_stop
+
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.done.return_value = False
+        monitor._task = mock_task  # polling already running
+
+        monitor.on_inning_end("game1", is_home_game=True)
+
+        pending_stop.cancel.assert_called_once()
+        assert monitor._stop_handle is None
+
     def test_noop_if_already_posted_this_game(self) -> None:
         monitor = make_monitor()
         monitor._game_id = "game1"

@@ -57,13 +57,15 @@ class SalmonRunMonitor:
         if self._posted:
             return
 
-        if self._task and not self._task.done():
-            return  # already polling
-
-        # Cancel any pending auto-stop left over from a previous inning.
+        # Cancel any pending auto-stop regardless of whether polling is already
+        # running — if the inning ended before the 2-minute timer fired we want
+        # to extend the window, not let the timer kill an active poll loop.
         if self._stop_handle:
             self._stop_handle.cancel()
             self._stop_handle = None
+
+        if self._task and not self._task.done():
+            return  # already polling; window extended above
 
         self._task = asyncio.create_task(self._poll_loop())
         logger.info("Salmon Run polling started", game_id=game_id)
