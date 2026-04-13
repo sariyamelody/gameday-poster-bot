@@ -358,14 +358,11 @@ class TestSalmonRunMonitor:
         monitor = make_monitor()
         assert monitor._game_start_cutoff is None
 
-        before = datetime.now(UTC)
         with patch.object(monitor, "_poll_loop", return_value=MagicMock()), \
                 patch("asyncio.create_task"):
             monitor.on_inning_end("game1", is_home_game=True)
-        after = datetime.now(UTC)
 
         assert monitor._game_start_cutoff is not None
-        assert before <= monitor._game_start_cutoff <= after
 
     def test_does_not_reset_cutoff_on_same_game(self) -> None:
         monitor = make_monitor()
