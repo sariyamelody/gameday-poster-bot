@@ -555,6 +555,8 @@ class MarinersBot:
         "Pickoff 2B": "🛑",
         "Pickoff 3B": "🛑",
         "Runner Out": "🛑",
+        "Manager Challenge": "📋",
+        "Umpire Review": "📋",
     }
 
     def _ordinal(self, n: int) -> str:
@@ -605,6 +607,25 @@ class MarinersBot:
 
         emoji = self._PLAY_EMOJIS.get(event, "⚾")
         text = f"{emoji} {description}"
+
+        review = play.get("reviewDetails")
+        if review:
+            if review.get("isOverturned"):
+                text += "\n✅ <b>Call overturned</b>"
+            else:
+                text += "\n❌ <b>Call upheld</b>"
+
+        for ev in play.get("playEvents", []):
+            pitch_review = ev.get("reviewDetails")
+            if pitch_review and ev.get("isPitch"):
+                call_desc = ev.get("details", {}).get("call", {}).get("description", "pitch")
+                challenger = pitch_review.get("player", {}).get("fullName", "")
+                challenger_prefix = f"{challenger} challenges" if challenger else "Challenge"
+                if pitch_review.get("isOverturned"):
+                    text += f"\n📋 {challenger_prefix} ({call_desc.lower()}) — ✅ <b>Call overturned</b>"
+                else:
+                    text += f"\n📋 {challenger_prefix} ({call_desc.lower()}) — ❌ <b>Call upheld</b>"
+                break
 
         if is_scoring and away_score is not None and home_score is not None:
             text += f"\n<b>{away_score}–{home_score}</b>"
