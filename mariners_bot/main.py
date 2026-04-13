@@ -662,8 +662,11 @@ class MarinersBot:
         away_score = result.get("awayScore")
         home_score = result.get("homeScore")
 
+        outs = play.get("count", {}).get("outs", 0)
+        out_dots = "●" * outs + "○" * (3 - outs)
+
         emoji = self._PLAY_EMOJIS.get(event, "⚾")
-        text = f"{emoji} {description}"
+        text = f"{out_dots} {emoji} {description}"
 
         review = play.get("reviewDetails")
         if review:
