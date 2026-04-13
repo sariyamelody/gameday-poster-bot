@@ -2,14 +2,24 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mariners_bot.clients.bluesky_client import BlueskyClient, SalmonRunPost, _extract_thumbnail
+from mariners_bot.clients.bluesky_client import (
+    BlueskyClient,
+    SalmonRunPost,
+    _extract_thumbnail,
+    _parse_created_at,
+)
 from mariners_bot.config import Settings
 from mariners_bot.scheduler.salmon_run_monitor import SalmonRunMonitor
+
+_NOW = datetime(2026, 4, 12, 3, 0, 0, tzinfo=UTC)
+_YESTERDAY = _NOW - timedelta(days=1)
+_EARLIER_TODAY = _NOW - timedelta(hours=2)
 
 
 def make_feed(*posts: dict[str, Any]) -> dict[str, Any]:
@@ -19,7 +29,10 @@ def make_feed(*posts: dict[str, Any]) -> dict[str, Any]:
             {
                 "post": {
                     "uri": p["uri"],
-                    "record": {"text": p["text"]},
+                    "record": {
+                        "text": p["text"],
+                        "createdAt": p.get("created_at", _NOW.isoformat()),
+                    },
                     "author": {
                         "handle": p.get("handle", "test.bsky.social"),
                         "displayName": p.get("display_name", "Test Account"),
@@ -39,6 +52,7 @@ def make_post(**kwargs: Any) -> SalmonRunPost:
         author_handle=kwargs.get("author_handle", "circlingseasports.bsky.social"),
         author_display_name=kwargs.get("author_display_name", "Circling Seattle Sports"),
         thumbnail_url=kwargs.get("thumbnail_url", None),
+        created_at=kwargs.get("created_at", _NOW),
     )
 
 
@@ -93,12 +107,38 @@ class TestExtractThumbnail:
 
 
 # ---------------------------------------------------------------------------
+# _parse_created_at
+# ---------------------------------------------------------------------------
+
+class TestParseCreatedAt:
+    def test_parses_z_suffix(self) -> None:
+        result = _parse_created_at("2026-04-12T02:58:45.331Z")
+        assert result is not None
+        assert result.tzinfo is UTC
+        assert result.year == 2026
+
+    def test_parses_offset(self) -> None:
+        result = _parse_created_at("2026-04-12T02:58:45+00:00")
+        assert result is not None
+        assert result.tzinfo is UTC
+
+    def test_returns_none_on_invalid(self) -> None:
+        assert _parse_created_at("not-a-date") is None
+
+    def test_returns_none_on_empty(self) -> None:
+        assert _parse_created_at("") is None
+
+
+# ---------------------------------------------------------------------------
 # BlueskyClient
 # ---------------------------------------------------------------------------
 
 class TestBlueskyClient:
     async def _fetch(
-        self, feed: dict[str, Any], seen: set[str] | None = None
+        self,
+        feed: dict[str, Any],
+        seen: set[str] | None = None,
+        since: datetime | None = None,
     ) -> list[SalmonRunPost]:
         """Helper: run get_new_salmon_run_posts with a mocked HTTP response."""
         mock_resp = AsyncMock()
@@ -113,7 +153,9 @@ class TestBlueskyClient:
 
         with patch("aiohttp.ClientSession", return_value=mock_session):
             async with BlueskyClient() as bsky:
-                return await bsky.get_new_salmon_run_posts("test.bsky.social", seen or set())
+                return await bsky.get_new_salmon_run_posts(
+                    "test.bsky.social", seen or set(), since=since
+                )
 
     @pytest.mark.asyncio
     async def test_returns_salmon_run_posts(self) -> None:
@@ -190,6 +232,46 @@ class TestBlueskyClient:
         feed = make_feed({"uri": "at://1", "text": "Silver wins! #SalmonRun"})
         results = await self._fetch(feed)
         assert results[0].thumbnail_url is None
+
+    @pytest.mark.asyncio
+    async def test_filters_posts_before_since(self) -> None:
+        cutoff = _NOW - timedelta(hours=1)
+        feed = make_feed(
+            {"uri": "at://old", "text": "Humpy wins! #SalmonRun",
+             "created_at": _YESTERDAY.isoformat()},
+            {"uri": "at://new", "text": "Sockeye wins! #SalmonRun",
+             "created_at": _NOW.isoformat()},
+        )
+        results = await self._fetch(feed, since=cutoff)
+        assert [p.uri for p in results] == ["at://new"]
+
+    @pytest.mark.asyncio
+    async def test_skips_post_exactly_at_since(self) -> None:
+        feed = make_feed(
+            {"uri": "at://exact", "text": "King wins! #SalmonRun",
+             "created_at": _NOW.isoformat()},
+        )
+        results = await self._fetch(feed, since=_NOW)
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_no_since_returns_all_matching(self) -> None:
+        feed = make_feed(
+            {"uri": "at://old", "text": "Humpy wins! #SalmonRun",
+             "created_at": _YESTERDAY.isoformat()},
+            {"uri": "at://new", "text": "Sockeye wins! #SalmonRun",
+             "created_at": _NOW.isoformat()},
+        )
+        results = await self._fetch(feed)
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_skips_post_with_missing_created_at(self) -> None:
+        # If createdAt is absent the post is silently skipped rather than erroring.
+        feed = make_feed({"uri": "at://1", "text": "Silver wins! #SalmonRun"})
+        feed["feed"][0]["post"]["record"].pop("createdAt", None)
+        results = await self._fetch(feed)
+        assert results == []
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_non_200(self) -> None:
@@ -271,6 +353,31 @@ class TestSalmonRunMonitor:
         assert monitor._game_id == "new_game"
         assert monitor._posted is False
         assert monitor._seen_uris == set()
+
+    def test_sets_game_start_cutoff_on_new_game(self) -> None:
+        monitor = make_monitor()
+        assert monitor._game_start_cutoff is None
+
+        before = datetime.now(UTC)
+        with patch.object(monitor, "_poll_loop", return_value=MagicMock()), \
+                patch("asyncio.create_task"):
+            monitor.on_inning_end("game1", is_home_game=True)
+        after = datetime.now(UTC)
+
+        assert monitor._game_start_cutoff is not None
+        assert before <= monitor._game_start_cutoff <= after
+
+    def test_does_not_reset_cutoff_on_same_game(self) -> None:
+        monitor = make_monitor()
+        fixed_cutoff = datetime(2026, 4, 12, 1, 0, 0, tzinfo=UTC)
+        monitor._game_id = "game1"
+        monitor._game_start_cutoff = fixed_cutoff
+
+        with patch.object(monitor, "_poll_loop", return_value=MagicMock()), \
+                patch("asyncio.create_task"):
+            monitor.on_inning_end("game1", is_home_game=True)
+
+        assert monitor._game_start_cutoff == fixed_cutoff
 
     def test_cancels_pending_stop_when_inning_ends_early(self) -> None:
         # If an inning finishes before the 2-minute auto-stop fires, the pending

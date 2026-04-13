@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 import structlog
 
@@ -36,6 +37,7 @@ class SalmonRunMonitor:
         self._task: asyncio.Task[None] | None = None
         self._stop_handle: asyncio.TimerHandle | None = None
         self._game_id: str | None = None
+        self._game_start_cutoff: datetime | None = None
         self._posted: bool = False
         self._seen_uris: set[str] = set()
 
@@ -51,6 +53,7 @@ class SalmonRunMonitor:
 
         if game_id != self._game_id:
             self._game_id = game_id
+            self._game_start_cutoff = datetime.now(UTC)
             self._posted = False
             self._seen_uris = set()
 
@@ -101,6 +104,7 @@ class SalmonRunMonitor:
                         posts = await bsky.get_new_salmon_run_posts(
                             handle=self.settings.salmon_run_bsky_handle,
                             seen_uris=self._seen_uris,
+                            since=self._game_start_cutoff,
                         )
                         for post in posts:
                             self._seen_uris.add(post.uri)

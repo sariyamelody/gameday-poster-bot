@@ -1,6 +1,7 @@
 """Bluesky public API client for fetching Salmon Run race results."""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
@@ -21,6 +22,7 @@ class SalmonRunPost:
     author_handle: str
     author_display_name: str
     thumbnail_url: str | None  # video thumbnail or first image, if present
+    created_at: datetime
 
     @property
     def web_url(self) -> str:
@@ -39,6 +41,14 @@ def _extract_thumbnail(embed: dict[str, Any]) -> str | None:
         if images:
             return images[0].get("thumb") or images[0].get("fullsize") or None
     return None
+
+
+def _parse_created_at(value: str) -> datetime | None:
+    """Parse a Bluesky ISO-8601 createdAt string to an aware UTC datetime."""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except (ValueError, AttributeError):
+        return None
 
 
 class BlueskyClient:
@@ -62,11 +72,12 @@ class BlueskyClient:
         self,
         handle: str,
         seen_uris: set[str],
+        since: datetime | None = None,
     ) -> list[SalmonRunPost]:
         """Return unseen Salmon Run posts from *handle* in chronological order.
 
         Fetches the 25 most recent posts and returns any containing salmon-run
-        keywords whose URIs haven't been seen yet.
+        keywords whose URIs haven't been seen and were published after *since*.
         """
         if not self.session:
             raise RuntimeError("Client not initialized. Use async context manager.")
@@ -96,6 +107,11 @@ class BlueskyClient:
             text: str = post.get("record", {}).get("text", "")
             if not any(kw in text.lower() for kw in _SALMON_RUN_KEYWORDS):
                 continue
+            created_at = _parse_created_at(post.get("record", {}).get("createdAt", ""))
+            if created_at is None:
+                continue
+            if since is not None and created_at <= since:
+                continue
             author = post.get("author", {})
             results.append(SalmonRunPost(
                 uri=uri,
@@ -103,6 +119,7 @@ class BlueskyClient:
                 author_handle=author.get("handle", handle),
                 author_display_name=author.get("displayName") or author.get("handle", handle),
                 thumbnail_url=_extract_thumbnail(post.get("embed", {})),
+                created_at=created_at,
             ))
 
         return results
