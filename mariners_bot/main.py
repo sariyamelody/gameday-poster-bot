@@ -20,7 +20,7 @@ from .clients import MLBClient
 from .config import get_settings
 from .database import Repository, get_database_session
 from .database.models import GameRecord
-from .models import Game, Transaction
+from .models import Game, NotificationJob, Transaction
 from .observability import setup_telemetry, shutdown_telemetry
 from .scheduler import GameScheduler
 from .scheduler.salmon_run_monitor import SalmonRunMonitor
@@ -154,6 +154,9 @@ class MarinersBot:
             # Perform initial schedule sync
             await self._sync_schedule()
 
+            # Send any pre-game notifications missed while the bot was down
+            await self._send_missed_notifications()
+
             # Perform initial transaction sync
             await self._sync_transactions()
 
@@ -275,14 +278,11 @@ class MarinersBot:
             async with self.db_session.get_session() as session:
                 repository = Repository(session)
 
-                # Get games starting from tomorrow (to avoid today's games that might have started)
-                tomorrow = datetime.now() + timedelta(days=1)
                 games = await repository.get_upcoming_games(limit=50)
 
-                # Filter for games starting tomorrow or later
                 upcoming_games = [
                     game for game in games
-                    if game.date >= tomorrow and not game.notification_sent
+                    if not game.notification_sent
                 ]
 
                 logger.debug("Retrieved upcoming games", count=len(upcoming_games))
@@ -291,6 +291,63 @@ class MarinersBot:
         except Exception as e:
             logger.error("Failed to get upcoming games", error=str(e))
             return []
+
+    async def _send_missed_notifications(self, window_hours: int = 3) -> None:
+        """Send pre-game notifications for games missed while the bot was down.
+
+        Only covers games whose start time falls within the last `window_hours` hours,
+        so stale notifications are never sent.
+        """
+        try:
+            now = datetime.now(UTC)
+            cutoff = now - timedelta(hours=window_hours)
+
+            async with self.db_session.get_session() as session:
+                from sqlalchemy import and_, select
+
+                from .database.models import GameRecord
+
+                result = await session.execute(
+                    select(GameRecord).where(
+                        and_(
+                            GameRecord.date >= cutoff,
+                            GameRecord.date <= now,
+                            GameRecord.notification_sent == False,  # noqa: E712
+                        )
+                    ).order_by(GameRecord.date)
+                )
+                records = result.scalars().all()
+
+            if not records:
+                logger.info("No missed pre-game notifications to send")
+                return
+
+            logger.info("Found missed pre-game notifications", count=len(records))
+
+            from .database.repository import Repository
+
+            for record in records:
+                async with self.db_session.get_session() as session:
+                    game = await Repository(session).get_game(str(record.game_id))
+
+                if game is None:
+                    continue
+
+                message = await self.scheduler._create_notification_message(game)
+                job = NotificationJob(
+                    game_id=game.game_id,
+                    scheduled_time=game.date,
+                    message=message,
+                )
+                success = await self.telegram_bot.send_notification(job)
+                logger.info(
+                    "Sent missed pre-game notification",
+                    game_id=game.game_id,
+                    success=success,
+                )
+
+        except Exception as e:
+            logger.error("Failed to send missed notifications", error=str(e))
 
     async def _sync_transactions(self) -> None:
         """Sync the latest Mariners transactions from MLB API."""
