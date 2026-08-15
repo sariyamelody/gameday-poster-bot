@@ -14,6 +14,7 @@ from .models import (
     NotificationJobRecord,
     PlayByPlaySessionRecord,
     PlayMessageRecord,
+    SillyBaseballAlertRecord,
     TransactionRecord,
     UserRecord,
     UserTransactionPreference,
@@ -278,6 +279,8 @@ class Repository:
                 existing_user.first_name = user.first_name  # type: ignore[assignment]
                 existing_user.last_name = user.last_name  # type: ignore[assignment]
                 existing_user.subscribed = user.subscribed  # type: ignore[assignment]
+                # silly_baseball_alerts is managed solely via set_silly_baseball_alerts() —
+                # never overwritten here, same as notification_sent/final_score_sent on games.
                 existing_user.timezone = user.timezone  # type: ignore[assignment]
                 existing_user.last_seen = user.last_seen  # type: ignore[assignment]
 
@@ -290,6 +293,7 @@ class Repository:
                     first_name=user.first_name,
                     last_name=user.last_name,
                     subscribed=user.subscribed,
+                    silly_baseball_alerts=user.silly_baseball_alerts,
                     timezone=user.timezone,
                     last_seen=user.last_seen,
                 )
@@ -316,6 +320,43 @@ class Repository:
 
         except Exception as e:
             logger.error("Failed to get subscribed users", error=str(e))
+            raise
+
+    async def get_users_opted_into_silly_baseball(self) -> list[User]:
+        """Get all users who opted in to 'Silly Baseball Is Happening' DMs."""
+        try:
+            result = await self.session.execute(
+                select(UserRecord).where(UserRecord.silly_baseball_alerts)
+            )
+            return [self._user_record_to_model(record) for record in result.scalars()]
+
+        except Exception as e:
+            logger.error("Failed to get silly baseball opted-in users", error=str(e))
+            raise
+
+    async def set_silly_baseball_alerts(self, chat_id: int, enabled: bool) -> bool:
+        """Set a user's silly-baseball DM opt-in, creating the user if needed.
+
+        Returns the new value.
+        """
+        try:
+            result = await self.session.execute(
+                select(UserRecord).where(UserRecord.chat_id == chat_id)
+            )
+            record = result.scalar_one_or_none()
+
+            if record:
+                record.silly_baseball_alerts = enabled  # type: ignore[assignment]
+            else:
+                record = UserRecord(chat_id=chat_id, silly_baseball_alerts=enabled)
+                self.session.add(record)
+
+            await self.session.commit()
+            return enabled
+
+        except Exception as e:
+            await self.session.rollback()
+            logger.error("Failed to set silly baseball alert preference", chat_id=chat_id, error=str(e))
             raise
 
     # Conversion methods
@@ -361,6 +402,7 @@ class Repository:
             first_name=record.first_name,  # type: ignore[arg-type]
             last_name=record.last_name,  # type: ignore[arg-type]
             subscribed=record.subscribed,  # type: ignore[arg-type]
+            silly_baseball_alerts=record.silly_baseball_alerts or False,  # type: ignore[arg-type]
             timezone=record.timezone,  # type: ignore[arg-type]
             created_at=record.created_at,  # type: ignore[arg-type]
             last_seen=record.last_seen,  # type: ignore[arg-type]
@@ -857,6 +899,33 @@ class Repository:
             return list(result.scalars())
         except Exception as e:
             logger.error("Failed to get recent play messages", game_id=game_id, error=str(e))
+            raise
+
+    # Silly baseball alert operations
+
+    async def try_record_silly_baseball_alert(self, game_pk: int, alert_type: str) -> bool:
+        """Attempt to claim the (game_pk, alert_type) dedup slot.
+
+        Returns True if this call claimed it (i.e. the alert should be sent/seeded
+        now — first time this condition has been seen for this game), or False if
+        it was already claimed (someone already alerted, or it was seeded on a
+        prior startup pass).
+        """
+        try:
+            record = SillyBaseballAlertRecord(game_pk=game_pk, alert_type=alert_type)
+            self.session.add(record)
+            await self.session.flush()
+            await self.session.commit()
+            return True
+        except IntegrityError:
+            await self.session.rollback()
+            return False
+        except Exception as e:
+            await self.session.rollback()
+            logger.error(
+                "Failed to record silly baseball alert",
+                game_pk=game_pk, alert_type=alert_type, error=str(e)
+            )
             raise
 
     # Cleanup

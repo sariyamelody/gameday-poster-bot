@@ -8,7 +8,8 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config import Settings
-from ..models import Game, GameStatus, GameType, Transaction
+from ..models import Game, GameStatus, GameType, LiveScoreboardGame, ScoreboardInning, Transaction
+from ..models.scoreboard import InningLine
 
 logger = structlog.get_logger(__name__)
 
@@ -398,6 +399,124 @@ class MLBClient:
         except TimeoutError:
             logger.error("Live game feed request timed out", game_pk=game_pk)
             raise
+
+    async def get_league_scoreboard(self, target_date: date) -> list[LiveScoreboardGame]:
+        """Get every MLB game's current state for a given day, in one request.
+
+        Used by the 'Silly Baseball Is Happening' poller — covers all games
+        league-wide via linescore data, with no per-game live-feed polling.
+        Regular season and postseason games only (spring training excluded).
+        """
+        params = {
+            "sportId": 1,
+            "date": target_date.isoformat(),
+            "hydrate": "linescore",
+        }
+
+        try:
+            data = await self._make_request("schedule", params=params)
+        except Exception as e:
+            logger.error("Failed to fetch league scoreboard", date=target_date.isoformat(), error=str(e))
+            raise
+
+        games = []
+        for date_entry in data.get("dates", []):
+            for game_data in date_entry.get("games", []):
+                game_type = game_data.get("gameType", "R")
+                if game_type not in ("R", "P", "D", "L", "F", "W"):
+                    continue  # skip spring training / exhibition / all-star
+                try:
+                    game = self._parse_scoreboard_game(game_data)
+                    if game:
+                        games.append(game)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to parse scoreboard game",
+                        game_pk=game_data.get("gamePk"),
+                        error=str(e)
+                    )
+                    continue
+
+        return games
+
+    def _parse_scoreboard_game(self, game_data: dict[str, Any]) -> LiveScoreboardGame | None:
+        """Parse one game entry from the league scoreboard response."""
+        try:
+            teams = game_data["teams"]
+            home = teams["home"]
+            away = teams["away"]
+
+            linescore = game_data.get("linescore", {})
+            ls_teams = linescore.get("teams", {})
+
+            innings = [
+                ScoreboardInning(
+                    num=inning["num"],
+                    home=InningLine(**inning.get("home", {})),
+                    away=InningLine(**inning.get("away", {})),
+                )
+                for inning in linescore.get("innings", [])
+            ]
+
+            defense = linescore.get("defense", {})
+            pitcher = defense.get("pitcher", {})
+
+            return LiveScoreboardGame(
+                game_pk=game_data["gamePk"],
+                game_type=game_data.get("gameType", "R"),
+                is_live=game_data.get("status", {}).get("abstractGameState") == "Live",
+                home_team=home["team"]["name"],
+                away_team=away["team"]["name"],
+                home_score=ls_teams.get("home", {}).get("runs", home.get("score", 0)) or 0,
+                away_score=ls_teams.get("away", {}).get("runs", away.get("score", 0)) or 0,
+                current_inning=linescore.get("currentInning"),
+                is_top_inning=linescore.get("isTopInning"),
+                scheduled_innings=linescore.get("scheduledInnings", 9) or 9,
+                innings=innings,
+                current_pitcher_id=pitcher.get("id"),
+                current_pitcher_name=pitcher.get("fullName"),
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error("Failed to parse scoreboard game data", error=str(e), data=game_data)
+            return None
+
+    async def get_active_player_positions(self, season: int) -> dict[int, str]:
+        """Bulk-fetch primary position abbreviations for all active players in a season.
+
+        Used to build a same-day cache so the silly-baseball poller doesn't need a
+        network call per unfamiliar pitcher id — this one call covers everyone.
+        """
+        try:
+            data = await self._make_request("sports/1/players", params={"season": season})
+        except Exception as e:
+            logger.error("Failed to fetch active player positions", season=season, error=str(e))
+            raise
+
+        positions: dict[int, str] = {}
+        for person in data.get("people", []):
+            person_id = person.get("id")
+            abbreviation = person.get("primaryPosition", {}).get("abbreviation")
+            if person_id is not None and abbreviation:
+                positions[person_id] = abbreviation
+
+        return positions
+
+    async def get_player_primary_position(self, person_id: int) -> str | None:
+        """Fetch a single player's primary position abbreviation (fallback lookup).
+
+        Used only when a pitcher id isn't in the daily-synced position cache
+        (e.g. a same-day call-up).
+        """
+        try:
+            data = await self._make_request(f"people/{person_id}")
+            people = data.get("people", [])
+            if not people:
+                return None
+            abbreviation: str | None = people[0].get("primaryPosition", {}).get("abbreviation")
+            return abbreviation
+        except Exception as e:
+            logger.warning("Failed to fetch player primary position", person_id=person_id, error=str(e))
+            return None
 
     async def get_team_transactions(
         self,

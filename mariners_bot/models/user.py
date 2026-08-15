@@ -13,6 +13,7 @@ class User(BaseModel):
     first_name: str | None = Field(default=None, description="User's first name")
     last_name: str | None = Field(default=None, description="User's last name")
     subscribed: bool = Field(default=True, description="Whether user is subscribed")
+    silly_baseball_alerts: bool = Field(default=False, description="Opted in to league-wide 'Silly Baseball Is Happening' DMs")
     timezone: str = Field(default="America/Los_Angeles", description="User's timezone")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="When user joined")
     last_seen: datetime | None = Field(default=None, description="Last interaction time")

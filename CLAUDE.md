@@ -20,6 +20,7 @@ Migrations are auto-generated — after changing a model, run `migrate` and Alem
 - **`mariners_bot/clients/mlb_client.py`** — MLB Stats API (base URL: `statsapi.mlb.com/api/v1`, Mariners team ID: `136`); live game feed uses a separate v1.1 endpoint: `statsapi.mlb.com/api/v1.1/game/{gamePk}/feed/live`
 - **`mariners_bot/scheduler/game_scheduler.py`** — APScheduler jobs: pre-game notifications (DateTrigger) and final score poller (IntervalTrigger, every 30s)
 - **`mariners_bot/scheduler/transaction_scheduler.py`** — Polls MLB transactions every 5 minutes; notifies users of trades, signings, injuries, etc. Per-user preferences stored in `user_transaction_preferences` table.
+- **`mariners_bot/scheduler/silly_baseball_detector.py`** — Pure detection logic for "Silly Baseball Is Happening" alerts (position player pitching, extra innings, blowout, slugfest inning, comedy of errors). Evaluated from one league-wide scoreboard poll per tick (`GET /schedule?hydrate=linescore`, all live MLB games in a single request) — no per-game live-feed polling. The poller itself lives in `game_scheduler.py` alongside the other interval jobs; orchestration (fetch, dedup, send) is `main.py`'s `_check_silly_baseball`. Alerts are deduped at most once per `(game_pk, alert_type)` ever, via a unique-constraint insert-then-send mutex.
 - **`mariners_bot/bot/telegram_bot.py`** — Telegram bot, command handlers, message sending
 - **`mariners_bot/database/`** — SQLite via SQLAlchemy async; Pydantic models in `mariners_bot/models/`
 - **`mariners_bot/main.py`** — Wires everything together; owns `_sync_schedule`, `_sync_transactions`, `_check_final_scores`
@@ -67,3 +68,9 @@ Metrics instruments are defined in `observability.py:create_app_metrics()` but n
 | `PLAYBYPLAY_CHANNEL_USERNAME` | No | Public `@username` of the channel, used to build `t.me/` deep links (falls back to numeric ID for private channels) |
 | `PLAYBYPLAY_POLL_INTERVAL` | No | Seconds between MLB live feed polls during active games (default: `20`) |
 | `PLAYBYPLAY_RETENTION_HOURS` | No | Hours to retain play-by-play DB data after a game ends before cleanup deletes it (default: `72`) |
+| `SILLY_BASEBALL_ENABLED` | No | Kill switch for league-wide "Silly Baseball Is Happening" alerts (default: `true`) |
+| `SILLY_BASEBALL_POLL_INTERVAL` | No | Seconds between league-wide scoreboard polls (default: `30`, must be ≤60) |
+| `SILLY_BASEBALL_BLOWOUT_MARGIN` | No | Run differential that counts as a blowout (default: `10`) |
+| `SILLY_BASEBALL_SLUGFEST_RUNS` | No | Runs in one half-inning that counts as a slugfest (default: `8`) |
+| `SILLY_BASEBALL_ERROR_COUNT` | No | Errors in one half-inning that counts as a comedy of errors (default: `3`) |
+| `SILLY_BASEBALL_EXTRA_INNINGS_START` | No | Inning number that counts as "extra innings" (default: `12`) |

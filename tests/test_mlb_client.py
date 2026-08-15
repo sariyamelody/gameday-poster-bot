@@ -36,6 +36,61 @@ class TestMLBClient:
         assert client._parse_game_status("C") == GameStatus.CANCELLED
         assert client._parse_game_status("UNKNOWN") == GameStatus.SCHEDULED  # Default
 
+    def test_parse_scoreboard_game(self) -> None:
+        """Test parsing a scoreboard entry (real API shape, trimmed)."""
+        settings = Settings(telegram_bot_token="test")
+        client = MLBClient(settings)
+
+        game_data = {
+            "gamePk": 822942,
+            "gameType": "R",
+            "status": {"abstractGameState": "Live"},
+            "teams": {
+                "away": {"team": {"name": "Baltimore Orioles"}, "score": 6},
+                "home": {"team": {"name": "Tampa Bay Rays"}, "score": 2},
+            },
+            "linescore": {
+                "currentInning": 9,
+                "isTopInning": False,
+                "scheduledInnings": 9,
+                "innings": [
+                    {
+                        "num": 1,
+                        "home": {"runs": 0, "hits": 1, "errors": 0},
+                        "away": {"runs": 0, "hits": 0, "errors": 0},
+                    },
+                    {
+                        "num": 2,
+                        "home": {"runs": 1, "hits": 3, "errors": 1},
+                        "away": {"runs": 1, "hits": 1, "errors": 0},
+                    },
+                ],
+                "teams": {
+                    "home": {"runs": 2, "hits": 8, "errors": 1},
+                    "away": {"runs": 6, "hits": 12, "errors": 0},
+                },
+                "defense": {
+                    "pitcher": {"id": 666974, "fullName": "Yennier Cano"},
+                },
+            },
+        }
+
+        game = client._parse_scoreboard_game(game_data)
+
+        assert game is not None
+        assert game.game_pk == 822942
+        assert game.is_live is True
+        assert game.home_team == "Tampa Bay Rays"
+        assert game.away_team == "Baltimore Orioles"
+        assert game.home_score == 2
+        assert game.away_score == 6
+        assert game.current_inning == 9
+        assert game.is_top_inning is False
+        assert game.current_pitcher_id == 666974
+        assert game.current_pitcher_name == "Yennier Cano"
+        assert len(game.innings) == 2
+        assert game.innings[1].home.errors == 1  # home team's error, attributed to the top half
+
     def test_parse_game_data(self) -> None:
         """Test parsing individual game data."""
         settings = Settings(telegram_bot_token="test")
