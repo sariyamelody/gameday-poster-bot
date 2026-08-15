@@ -68,6 +68,7 @@ class UserRecord(Base):
     first_name = Column(String)
     last_name = Column(String)
     subscribed = Column(Boolean, default=True, index=True)
+    silly_baseball_alerts = Column(Boolean, default=False, index=True)
     timezone = Column(String, default="America/Los_Angeles")
     created_at = Column(DateTime(timezone=True), default=func.now())
     last_seen = Column(DateTime(timezone=True))
@@ -192,3 +193,23 @@ class PlayMessageRecord(Base):
 
     def __repr__(self) -> str:
         return f"<PlayMessageRecord(game_id={self.game_id}, at_bat_index={self.at_bat_index})>"
+
+
+class SillyBaseballAlertRecord(Base):
+    """Dedup record for a 'Silly Baseball Is Happening' alert.
+
+    Each (game_pk, alert_type) pair fires at most once per game, ever — the
+    unique constraint below is used as the send mutex (insert-then-send).
+    """
+
+    __tablename__ = "silly_baseball_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_pk: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    alert_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (UniqueConstraint("game_pk", "alert_type"),)
+
+    def __repr__(self) -> str:
+        return f"<SillyBaseballAlertRecord(game_pk={self.game_pk}, alert_type={self.alert_type})>"

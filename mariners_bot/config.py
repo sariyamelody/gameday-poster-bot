@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     salmon_run_bsky_handle: str = Field(default="circlingseasports.bsky.social")
     salmon_run_poll_interval: int = Field(default=15)  # Seconds between Bluesky polls
 
+    # "Silly Baseball Is Happening" league-wide alerts
+    silly_baseball_enabled: bool = Field(default=True)             # Master kill switch
+    silly_baseball_poll_interval: int = Field(default=30)          # Seconds between scoreboard polls (<=60)
+    silly_baseball_blowout_margin: int = Field(default=10)         # Run differential that counts as a blowout
+    silly_baseball_slugfest_runs: int = Field(default=8)           # Runs in a half-inning that counts as a slugfest
+    silly_baseball_error_count: int = Field(default=3)             # Errors in a half-inning that counts as comedy of errors
+    silly_baseball_extra_innings_start: int = Field(default=12)    # Inning number that counts as "extra innings"
+
     # Application Configuration
     debug: bool = Field(default=False)
     environment: str = Field(default="production")

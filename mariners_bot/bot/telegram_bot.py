@@ -188,6 +188,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("toggle_status_changes", self._handle_toggle_status_changes))
         self.application.add_handler(CommandHandler("toggle_other", self._handle_toggle_other))
         self.application.add_handler(CommandHandler("toggle_major_only", self._handle_toggle_major_only))
+        self.application.add_handler(CommandHandler("toggle_silly_baseball", self._handle_toggle_silly_baseball))
 
         # Message handler for regular text - only respond in private chats
         self.application.add_handler(
@@ -275,9 +276,13 @@ class TelegramBot:
             "• /toggle_status_changes - Toggle status change notifications\n"
             "• /toggle_other - Toggle other transaction notifications\n"
             "• /toggle_major_only - Toggle major league only filter\n\n"
+            "<b>Silly Baseball:</b>\n"
+            "• /toggle_silly_baseball - Toggle DMs for league-wide 'silly baseball' "
+            "moments (position players pitching, extra innings, blowouts, and more)\n\n"
             "<b>Features:</b>\n"
             "• 🔔 Automatic notifications 5 minutes before games\n"
             "• 📰 Real-time Mariners transaction alerts\n"
+            "• 🃏 Optional league-wide silly baseball alerts\n"
             "• 🔗 Direct links to MLB Gameday\n"
             "• 🏟️ Game details (opponent, venue, time)\n"
             "• ⚙️ Customizable transaction notifications\n"
@@ -813,6 +818,47 @@ class TelegramBot:
     async def _handle_toggle_major_only(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /toggle_major_only command."""
         await self._toggle_preference(update, "major_league_only", "Major League Only")
+
+    async def _handle_toggle_silly_baseball(self, update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /toggle_silly_baseball command."""
+        if not update.effective_chat:
+            return
+
+        try:
+            from sqlalchemy import select
+
+            from ..database.models import UserRecord
+
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+
+                result = await session.execute(
+                    select(UserRecord).where(UserRecord.chat_id == update.effective_chat.id)
+                )
+                user_record = result.scalar_one_or_none()
+                current_value = bool(user_record.silly_baseball_alerts) if user_record else False
+
+                new_value = await repository.set_silly_baseball_alerts(update.effective_chat.id, not current_value)
+
+            status = "enabled" if new_value else "disabled"
+            emoji = "✅" if new_value else "❌"
+
+            message = (
+                f"🃏 <b>Settings Updated</b>\n\n"
+                f"{emoji} <b>Silly Baseball</b> DMs are now <b>{status}</b>.\n\n"
+                f"When enabled, I'll DM you whenever any MLB game (not just the Mariners) "
+                f"has a position player pitching, hits extra innings, a blowout, a slugfest "
+                f"inning, or a comedy of errors.\n\n"
+                f"🌊 Go Mariners!"
+            )
+
+            if update.message:
+                await update.message.reply_text(message, parse_mode=ParseMode.HTML)
+
+        except Exception as e:
+            logger.error("Error toggling silly baseball preference", error=str(e))
+            if update.message:
+                await update.message.reply_text("Sorry, I couldn't update your Silly Baseball preference right now.")
 
     async def _toggle_preference(self, update: Update, preference_name: str, display_name: str) -> None:
         """Toggle a specific transaction preference."""

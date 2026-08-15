@@ -23,6 +23,7 @@ _notification_callback: Callable[[NotificationJob], Awaitable[bool]] | None = No
 _final_score_callback: Callable[[], Awaitable[None]] | None = None
 _playbyplay_callback: Callable[[], Awaitable[None]] | None = None
 _playbyplay_cleanup_callback: Callable[[], Awaitable[None]] | None = None
+_silly_baseball_callback: Callable[[], Awaitable[None]] | None = None
 
 
 async def _sync_schedule_wrapper() -> None:
@@ -69,6 +70,17 @@ async def _playbyplay_cleanup_wrapper() -> None:
             logger.error("No play-by-play cleanup callback set")
     except Exception as e:
         logger.error("Error in play-by-play cleanup callback", error=str(e))
+
+
+async def _silly_baseball_wrapper() -> None:
+    """Wrapper for silly-baseball scoreboard polling with error handling."""
+    try:
+        if _silly_baseball_callback:
+            await _silly_baseball_callback()
+        else:
+            logger.error("No silly baseball callback set")
+    except Exception as e:
+        logger.error("Error in silly baseball callback", error=str(e))
 
 
 async def _notification_wrapper(notification_job: NotificationJob) -> None:
@@ -139,6 +151,9 @@ class GameScheduler:
             self._schedule_playbyplay_poller()
             self._schedule_playbyplay_cleanup()
 
+            # Schedule silly-baseball scoreboard poller if a callback is registered
+            self._schedule_silly_baseball_poller()
+
             logger.info("Game scheduler started")
 
         except Exception as e:
@@ -186,6 +201,12 @@ class GameScheduler:
         global _playbyplay_cleanup_callback
         _playbyplay_cleanup_callback = callback
         logger.debug("Play-by-play cleanup callback set")
+
+    def set_silly_baseball_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
+        """Set the callback for polling the league-wide scoreboard for silly-baseball alerts."""
+        global _silly_baseball_callback
+        _silly_baseball_callback = callback
+        logger.debug("Silly baseball callback set")
 
     async def schedule_game_notifications(self, games: list[Game]) -> int:
         """Schedule notification jobs for a list of games."""
@@ -421,5 +442,22 @@ class GameScheduler:
             max_instances=1,
         )
         logger.info("Scheduled play-by-play cleanup job", hour=3, timezone=self.settings.scheduler_timezone)
+
+    def _schedule_silly_baseball_poller(self) -> None:
+        """Schedule the league-wide silly-baseball scoreboard poller."""
+        global _silly_baseball_callback
+        if not _silly_baseball_callback:
+            logger.debug("No silly baseball callback set, skipping silly baseball scheduling")
+            return
+
+        interval = self.settings.silly_baseball_poll_interval
+        self.scheduler.add_job(
+            _silly_baseball_wrapper,
+            trigger=IntervalTrigger(seconds=interval, timezone=self.timezone),
+            id='silly_baseball_poller',
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("Scheduled silly baseball poller", interval_seconds=interval)
 
 

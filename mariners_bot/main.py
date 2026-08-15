@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .clients.bluesky_client import SalmonRunPost
 
 import click
+import pytz
 import structlog
 import uvloop
 from sqlalchemy import and_, or_, select
@@ -24,6 +25,7 @@ from .models import Game, NotificationJob, Transaction
 from .observability import setup_telemetry, shutdown_telemetry
 from .scheduler import GameScheduler
 from .scheduler.salmon_run_monitor import SalmonRunMonitor
+from .scheduler.silly_baseball_detector import SillyBaseballAlertType, SillyBaseballDetector
 from .scheduler.transaction_scheduler import TransactionNotificationBatcher, TransactionScheduler
 
 # Setup structured logging
@@ -80,6 +82,18 @@ class MarinersBot:
         if self.settings.playbyplay_channel_id and self.settings.playbyplay_group_id:
             self.scheduler.set_playbyplay_callback(self._poll_playbyplay)
             self.scheduler.set_playbyplay_cleanup_callback(self._cleanup_playbyplay_data)
+
+        # "Silly Baseball Is Happening" league-wide alerts (kill switch: SILLY_BASEBALL_ENABLED)
+        self.silly_baseball_detector = SillyBaseballDetector(self.settings)
+        self._silly_baseball_position_cache: dict[int, str] = {}
+        # First poll after (re)start seeds already-true conditions into the dedup
+        # table without sending, so a restart mid-game doesn't mass-fire alerts
+        # for level-triggered conditions (extra innings/blowout/etc.) that have
+        # actually been true for a while. Position-player-pitching is exempt —
+        # it's edge-triggered, so discovering it late is still new information.
+        self._silly_baseball_seeded_startup = False
+        if self.settings.silly_baseball_enabled:
+            self.scheduler.set_silly_baseball_callback(self._check_silly_baseball)
 
         logger.info("Mariners bot initialized", version="0.1.0")
 
@@ -272,6 +286,24 @@ class MarinersBot:
             logger.error("Failed to sync schedule", error=str(e))
             raise
 
+        # Refresh the silly-baseball position cache alongside the daily schedule
+        # sync (same 6am PT + startup cadence) — a failure here shouldn't fail
+        # schedule sync, so it's handled separately.
+        if self.settings.silly_baseball_enabled:
+            await self._sync_silly_baseball_positions()
+
+    async def _sync_silly_baseball_positions(self) -> None:
+        """Bulk-refresh the pitcher-id -> primary-position cache for silly-baseball detection."""
+        try:
+            async with MLBClient(self.settings) as mlb_client:
+                positions = await mlb_client.get_active_player_positions(season=datetime.now().year)
+
+            self._silly_baseball_position_cache.update(positions)
+            logger.info("Refreshed silly baseball position cache", player_count=len(positions))
+
+        except Exception as e:
+            logger.warning("Failed to refresh silly baseball position cache", error=str(e))
+
     async def _get_upcoming_games(self) -> list[Game]:
         """Get upcoming games that need notifications."""
         try:
@@ -400,6 +432,75 @@ class MarinersBot:
         except Exception as e:
             logger.error("Failed to sync transactions", error=str(e))
             raise
+
+    async def _check_silly_baseball(self) -> None:
+        """Poll the league-wide scoreboard and send 'Silly Baseball Is Happening' alerts.
+
+        Single request per tick (schedule + linescore, all games for the day) —
+        no per-game live-feed polling. Query date is Pacific Time, not UTC:
+        computing it in UTC would roll a still-in-progress PT evening game to
+        "tomorrow" and the poll would silently find zero live games for hours.
+        """
+        try:
+            pt_date = datetime.now(pytz.timezone(self.settings.scheduler_timezone)).date()
+
+            async with MLBClient(self.settings) as mlb_client:
+                games = await mlb_client.get_league_scoreboard(pt_date)
+
+                live_games = [g for g in games if g.is_live]
+                if not live_games:
+                    return
+
+                unresolved = self.silly_baseball_detector.unresolved_pitcher_ids(
+                    live_games, self._silly_baseball_position_cache
+                )
+                for pitcher_id in unresolved:
+                    position = await mlb_client.get_player_primary_position(pitcher_id)
+                    if position:
+                        self._silly_baseball_position_cache[pitcher_id] = position
+                    # If the lookup fails, leave it unresolved — retried next poll
+                    # rather than permanently suppressing that game's alert.
+
+            alerts = self.silly_baseball_detector.evaluate(live_games, self._silly_baseball_position_cache)
+            if not alerts:
+                return
+
+            seeding = not self._silly_baseball_seeded_startup
+            sent_count = 0
+
+            async with self.db_session.get_session() as session:
+                repository = Repository(session)
+
+                for alert in alerts:
+                    seed_only = seeding and alert.alert_type != SillyBaseballAlertType.POSITION_PLAYER_PITCHING
+                    claimed = await repository.try_record_silly_baseball_alert(alert.game_pk, alert.alert_type.value)
+                    if not claimed or seed_only:
+                        continue
+
+                    await self._send_silly_baseball_alert(alert.message)
+                    sent_count += 1
+
+            if seeding:
+                self._silly_baseball_seeded_startup = True
+                logger.info("Seeded silly baseball dedup state on startup", conditions_seen=len(alerts))
+
+            if sent_count:
+                logger.info("Sent silly baseball alerts", count=sent_count)
+
+        except Exception as e:
+            logger.error("Failed to check silly baseball conditions", error=str(e))
+
+    async def _send_silly_baseball_alert(self, message: str) -> None:
+        """Send a silly-baseball alert to the broadcast channel and opted-in DM subscribers."""
+        if self.settings.telegram_chat_id:
+            await self.telegram_bot.send_to_chat(self.settings.telegram_chat_id, message)
+
+        async with self.db_session.get_session() as session:
+            repository = Repository(session)
+            opted_in_users = await repository.get_users_opted_into_silly_baseball()
+
+        for user in opted_in_users:
+            await self.telegram_bot.send_to_chat(str(user.chat_id), message)
 
     async def _check_final_scores(self) -> None:
         """Check for completed games and send final score notifications."""
