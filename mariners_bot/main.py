@@ -258,39 +258,28 @@ class MarinersBot:
             logger.error("Error during shutdown", error=str(e))
 
     async def _sync_schedule(self) -> None:
-        """Sync the Mariners schedule from MLB API."""
+        """Sync the Mariners schedule from MLB API.
+
+        Fetches a bounded rolling window (schedule_sync_lookahead_days, default
+        14) day-by-day rather than the whole remaining season in one range
+        request — MLB's /schedule endpoint now rejects startDate/endDate range
+        queries outright (406), so date=<single day> is the only reliably
+        accepted shape. This sync runs daily, so the window keeps rolling
+        forward and every game gets picked up well before it needs a
+        notification scheduled; nothing needs the full season cached at once.
+        """
         logger.info("Starting schedule sync")
 
         try:
             async with MLBClient(self.settings) as mlb_client:
-                current_year = datetime.now().year
-                current_date = datetime.now()
+                start = datetime.now(UTC).date()
+                end = start + timedelta(days=self.settings.schedule_sync_lookahead_days)
 
-                all_games = []
-
-                # Get remaining games from current season (including postseason)
-                current_season_games = await mlb_client.get_team_schedule(
-                    start_date=current_date,
-                    end_date=datetime(current_year, 12, 31),
-                    season=current_year
-                )
-                all_games.extend(current_season_games)
-                logger.info("Fetched current season games",
-                           season=current_year,
-                           count=len(current_season_games))
-
-                # If we're in the off-season (after September), also get next season's games
-                if current_date.month >= 10:  # October or later
-                    next_year = current_year + 1
-                    next_season_games = await mlb_client.get_team_schedule(
-                        start_date=datetime(next_year, 1, 1),
-                        end_date=datetime(next_year, 12, 31),
-                        season=next_year
-                    )
-                    all_games.extend(next_season_games)
-                    logger.info("Fetched next season games",
-                               season=next_year,
-                               count=len(next_season_games))
+                all_games = await mlb_client.get_team_schedule_by_day(start, end)
+                logger.info("Fetched upcoming schedule window",
+                           start_date=start.isoformat(),
+                           end_date=end.isoformat(),
+                           count=len(all_games))
 
             if not all_games:
                 logger.warning("No games found in schedule sync")
@@ -1375,16 +1364,12 @@ def sync_schedule(days: int) -> None:
 
         try:
             async with MLBClient(settings) as mlb_client:
-                end_date = datetime.now() + timedelta(days=days)
-                games = await mlb_client.get_team_schedule(
-                    start_date=datetime.now(),
-                    end_date=end_date
-                )
+                start_date = datetime.now(UTC).date()
+                end_date = start_date + timedelta(days=days)
+                games = await mlb_client.get_team_schedule_by_day(start_date, end_date)
 
-            mariners_games = [g for g in games if g.is_mariners_game]
-
-            click.echo(f"Found {len(mariners_games)} Mariners games in the next {days} days:")
-            for game in mariners_games:
+            click.echo(f"Found {len(games)} Mariners games in the next {days} days:")
+            for game in games:
                 click.echo(f"  {game}")
 
         except Exception as e:

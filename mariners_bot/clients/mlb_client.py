@@ -1,6 +1,6 @@
 """MLB Stats API client."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -81,93 +81,48 @@ class MLBClient:
             logger.error("MLB API request timed out", url=url)
             raise
 
-    async def get_team_schedule(
-        self,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
-        season: int | None = None,
-        game_types: list[str] | None = None
-    ) -> list[Game]:
-        """Get the Mariners schedule for a date range.
 
-        Args:
-            start_date: Start date for schedule
-            end_date: End date for schedule
-            season: Season year
-            game_types: List of game types to include. Options:
-                       'R' = Regular season, 'S' = Spring training,
-                       'P' = Postseason, 'D' = Division Series,
-                       'L' = League Championship, 'F' = Championship Series,
-                       'W' = World Series
-                       Defaults to all types
+    async def get_team_schedule_by_day(self, start_date: date, end_date: date) -> list[Game]:
+        """Get the Mariners schedule for a date range, one request per day.
+
+        get_team_schedule's single-request-per-gameType approach (filtering via
+        `teamId`/`gameType`/`startDate`/`endDate` query params) is no longer
+        reliable — MLB's API now rejects `startDate`/`endDate` range queries
+        outright (406), and rejects `teamId` without `hydrate`. The `date=<day>`
+        (single day, no range) shape is the one still reliably accepted, so this
+        fetches one day at a time and filters for Mariners games client-side —
+        the same pattern the silly-baseball scoreboard poller already relies on.
+
+        Every game type (regular season, postseason, spring training) comes back
+        in the same per-day response, so this also replaces the old per-gameType
+        looping — no separate postseason request needed.
+
+        Intended for a bounded lookahead window (days, not months) — callers
+        needing the whole remaining season should call this repeatedly as part
+        of a daily-rolling sync rather than requesting a huge range up front.
         """
-        if game_types is None:
-            game_types = ['R', 'S', 'P', 'D', 'L', 'F', 'W']  # Include all game types by default
+        all_games: list[Game] = []
+        current = start_date
 
-        all_games = []
-
-        # Fetch games for each game type separately since API doesn't support multiple gameTypes
-        for game_type in game_types:
+        while current <= end_date:
+            params = {"sportId": 1, "date": current.isoformat()}
             try:
-                if game_type in ['P', 'D', 'L', 'F', 'W']:  # All postseason game types
-                    # For postseason games, we need to fetch all games and filter for Mariners
-                    # because the API may not return postseason games when filtering by teamId
-                    params = {
-                        "sportId": 1,  # MLB
-                        "gameType": game_type,
-                    }
-                else:
-                    # For regular season and spring training, use teamId filter
-                    params = {
-                        "teamId": self.team_id,
-                        "sportId": 1,  # MLB
-                        "gameType": game_type,
-                    }
-
-                if season:
-                    params["season"] = season
-                else:
-                    # Default to current year
-                    params["season"] = datetime.now().year
-
-                if start_date:
-                    params["startDate"] = start_date.strftime("%Y-%m-%d")
-
-                if end_date:
-                    params["endDate"] = end_date.strftime("%Y-%m-%d")
-
-                logger.debug("Fetching schedule", game_type=game_type, params=params)
                 data = await self._make_request("schedule", params=params)
-                games = self._parse_schedule_response(data, game_type)
-
-                # For postseason games, we need to filter for Mariners games since we fetched all teams
-                if game_type in ['P', 'D', 'L', 'F', 'W']:
-                    mariners_games = [game for game in games if game.is_mariners_game]
-                    all_games.extend(mariners_games)
-                    logger.debug("Fetched and filtered postseason games",
-                               game_type=game_type,
-                               total_games=len(games),
-                               mariners_games=len(mariners_games))
-                else:
-                    all_games.extend(games)
-                    logger.debug("Fetched games", game_type=game_type, count=len(games))
-
+                all_games.extend(self._parse_schedule_response(data))
             except Exception as e:
-                logger.warning("Failed to fetch schedule for game type",
-                             game_type=game_type, error=str(e))
-                # Continue with other game types even if one fails
-                continue
+                logger.warning("Failed to fetch schedule for day", date=current.isoformat(), error=str(e))
+                # Continue with other days even if one fails
+            current += timedelta(days=1)
 
-        # Remove duplicates based on game_id and sort by date
-        unique_games = {}
-        for game in all_games:
-            unique_games[game.game_id] = game
-
+        unique_games = {game.game_id: game for game in all_games}
         sorted_games = sorted(unique_games.values(), key=lambda g: g.date)
 
-        logger.info("Fetched complete schedule",
-                   total_games=len(sorted_games),
-                   game_types=game_types)
+        logger.info(
+            "Fetched schedule by day",
+            total_games=len(sorted_games),
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+        )
 
         return sorted_games
 
@@ -321,11 +276,19 @@ class MLBClient:
         return games
 
     def _parse_game_data(self, game_data: dict[str, Any], game_type: str = "R") -> Game | None:
-        """Parse individual game data from MLB API response."""
+        """Parse individual game data from MLB API response.
+
+        `game_type` is a fallback for callers that already know every game in the
+        response is one type (e.g. the old gameType-filtered query). Callers that
+        fetch a whole day's slate (get_team_schedule_by_day) get a mix of types
+        back, so the game's own "gameType" field — present on every entry — takes
+        precedence when available.
+        """
         try:
             # Extract basic game information
             game_id = str(game_data["gamePk"])
             game_date_str = game_data["gameDate"]
+            game_type = game_data.get("gameType", game_type)
 
             # Parse the datetime (MLB API returns ISO format with timezone)
             game_date = datetime.fromisoformat(

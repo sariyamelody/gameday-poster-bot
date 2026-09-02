@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     scheduler_timezone: str = Field(default="America/Los_Angeles")
     notification_advance_minutes: int = Field(default=5)
     schedule_sync_hour: int = Field(default=6)  # 6 AM PT
+    schedule_sync_lookahead_days: int = Field(default=14)  # rolling window; re-synced daily
 
     # Observability Configuration
     log_level: str = Field(default="INFO")
