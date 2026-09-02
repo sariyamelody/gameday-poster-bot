@@ -1,6 +1,7 @@
 """Tests for MLB API client."""
 
 from datetime import UTC, date, datetime
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
@@ -268,7 +269,7 @@ class TestGetTeamScheduleByDay:
         settings = Settings(telegram_bot_token="test")
         client = MLBClient(settings)
 
-        def make_response(day: str, mariners_game: bool) -> dict:
+        def make_response(day: str, mariners_game: bool) -> dict[str, Any]:
             return {
                 "dates": [
                     {
@@ -328,7 +329,7 @@ class TestGetTeamScheduleByDay:
             ]
         }
 
-        async def flaky_request(_endpoint: str, params: dict) -> dict:
+        async def flaky_request(_endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
             if params["date"] == "2026-09-02":
                 raise ValueError("406 Not Acceptable")
             return good_response
