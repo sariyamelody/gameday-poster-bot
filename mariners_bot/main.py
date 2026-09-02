@@ -145,6 +145,8 @@ class MarinersBot:
           parent of head so upgrade applies only the missing migration(s).
         - Existing DB with migration history: run upgrade head normally.
         """
+        import logging
+
         from sqlalchemy import inspect
 
         from alembic import command
@@ -156,6 +158,13 @@ class MarinersBot:
 
         logger.info("Running database migrations")
         alembic_cfg = Config("alembic.ini")
+
+        # alembic/env.py calls logging.config.fileConfig(), which resets the root
+        # logger to alembic.ini's [logger_root] level (WARNING) — silently undoing
+        # start()'s LOG_LEVEL setup for the rest of the process's lifetime, since
+        # migrations run once at startup before anything else. Restore our level
+        # afterward rather than let every subsequent logger.info() go dark.
+        root_level = logging.getLogger().level
 
         with self.db_session.sync_engine.connect() as conn:
             if "alembic_version" not in inspect(conn).get_table_names():
@@ -180,6 +189,7 @@ class MarinersBot:
                         command.stamp(alembic_cfg, str(head_rev.down_revision))
 
         command.upgrade(alembic_cfg, "head")
+        logging.getLogger().setLevel(root_level)
         logger.info("Database migrations complete")
 
     async def start(self) -> None:
