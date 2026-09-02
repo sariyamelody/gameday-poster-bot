@@ -126,24 +126,6 @@ class MLBClient:
 
         return sorted_games
 
-    async def get_game_details(self, game_id: str) -> Game | None:
-        """Get detailed information for a specific game."""
-        params = {
-            "gamePk": game_id,
-            "hydrate": "team,linescore"
-        }
-
-        try:
-            data = await self._make_request("schedule", params=params)
-            # For game details, we don't know the game type, so we'll try to infer it
-            # from the response or default to regular season
-            games = self._parse_schedule_response(data, "R")  # Default to regular season
-            return games[0] if games else None
-
-        except Exception as e:
-            logger.error("Failed to fetch game details", game_id=game_id, error=str(e))
-            return None
-
     async def get_game_score(self, game_id: str) -> dict[str, Any] | None:
         """Get the current score and status for a specific game."""
         params = {
