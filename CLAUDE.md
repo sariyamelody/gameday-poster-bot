@@ -69,7 +69,7 @@ Metrics instruments are defined in `observability.py:create_app_metrics()` but n
 | `PLAYBYPLAY_POLL_INTERVAL` | No | Seconds between MLB live feed polls during active games (default: `20`) |
 | `PLAYBYPLAY_RETENTION_HOURS` | No | Hours to retain play-by-play DB data after a game ends before cleanup deletes it (default: `72`) |
 | `SILLY_BASEBALL_ENABLED` | No | Kill switch for league-wide "Silly Baseball Is Happening" alerts (default: `true`) |
-| `SILLY_BASEBALL_POLL_INTERVAL` | No | Seconds between league-wide scoreboard polls (default: `30`, must be ≤60) |
+| `SILLY_BASEBALL_POLL_INTERVAL` | No | Seconds between league-wide scoreboard polls when a game is active (default: `60`, must be ≤60) |
 | `SILLY_BASEBALL_BLOWOUT_MARGIN` | No | Run differential that counts as a blowout (default: `10`) |
 | `SILLY_BASEBALL_SLUGFEST_RUNS` | No | Runs in one half-inning that counts as a slugfest (default: `8`) |
 | `SILLY_BASEBALL_ERROR_COUNT` | No | Errors in one half-inning that counts as a comedy of errors (default: `3`) |

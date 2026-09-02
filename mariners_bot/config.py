@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     # "Silly Baseball Is Happening" league-wide alerts
     silly_baseball_enabled: bool = Field(default=True)             # Master kill switch
-    silly_baseball_poll_interval: int = Field(default=30)          # Seconds between scoreboard polls (<=60)
+    silly_baseball_poll_interval: int = Field(default=60)          # Seconds between scoreboard polls (<=60)
     silly_baseball_blowout_margin: int = Field(default=10)         # Run differential that counts as a blowout
     silly_baseball_slugfest_runs: int = Field(default=8)           # Runs in a half-inning that counts as a slugfest
     silly_baseball_error_count: int = Field(default=3)             # Errors in a half-inning that counts as comedy of errors

@@ -5,13 +5,28 @@ from typing import Any
 
 import aiohttp
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from ..config import Settings
 from ..models import Game, GameStatus, GameType, LiveScoreboardGame, ScoreboardInning, Transaction
 from ..models.scoreboard import InningLine
 
 logger = structlog.get_logger(__name__)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Whether a failed MLB API request is worth retrying.
+
+    4xx responses (other than 429, which signals "back off and retry") mean the
+    request itself was rejected and a retry will fail the same way — retrying it
+    anyway just triples our request volume for nothing. This matters especially
+    for a hard block like a 406 from an IP-reputation filter: retrying 3x per
+    call instead of 1x makes an already-bad situation worse. 5xx and connection
+    errors are transient and worth retrying.
+    """
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return exc.status == 429 or exc.status >= 500
+    return isinstance(exc, aiohttp.ClientError | TimeoutError)
 
 
 class MLBClient:
@@ -39,7 +54,8 @@ class MLBClient:
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10)
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception(_is_retryable),
     )
     async def _make_request(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Make a request to the MLB API with retry logic."""
@@ -371,7 +387,8 @@ class MLBClient:
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10)
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception(_is_retryable),
     )
     async def get_live_game_feed(self, game_pk: int) -> dict[str, Any] | None:
         """Fetch the live game feed from the MLB Stats API v1.1 endpoint.
@@ -461,10 +478,16 @@ class MLBClient:
             defense = linescore.get("defense", {})
             pitcher = defense.get("pitcher", {})
 
+            raw_game_date = game_data.get("gameDate")
+            game_date = (
+                datetime.fromisoformat(raw_game_date.replace("Z", "+00:00")) if raw_game_date else None
+            )
+
             return LiveScoreboardGame(
                 game_pk=game_data["gamePk"],
                 game_type=game_data.get("gameType", "R"),
                 is_live=game_data.get("status", {}).get("abstractGameState") == "Live",
+                game_date=game_date,
                 home_team=home["team"]["name"],
                 away_team=away["team"]["name"],
                 home_score=ls_teams.get("home", {}).get("runs", home.get("score", 0)) or 0,

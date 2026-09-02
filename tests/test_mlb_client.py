@@ -3,9 +3,11 @@
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
+import aiohttp
 import pytest
 
 from mariners_bot.clients import MLBClient
+from mariners_bot.clients.mlb_client import _is_retryable
 from mariners_bot.config import Settings
 from mariners_bot.models import GameStatus
 
@@ -45,6 +47,7 @@ class TestMLBClient:
             "gamePk": 822942,
             "gameType": "R",
             "status": {"abstractGameState": "Live"},
+            "gameDate": "2026-09-02T23:40:00Z",
             "teams": {
                 "away": {"team": {"name": "Baltimore Orioles"}, "score": 6},
                 "home": {"team": {"name": "Tampa Bay Rays"}, "score": 2},
@@ -80,6 +83,7 @@ class TestMLBClient:
         assert game is not None
         assert game.game_pk == 822942
         assert game.is_live is True
+        assert game.game_date == datetime(2026, 9, 2, 23, 40, tzinfo=UTC)
         assert game.home_team == "Tampa Bay Rays"
         assert game.away_team == "Baltimore Orioles"
         assert game.home_score == 2
@@ -186,3 +190,38 @@ class TestMLBClient:
 
             # Session should be closed when exiting context
             mock_session.close.assert_called_once()
+
+
+class TestIsRetryable:
+    """Test the retry predicate that decides whether a failed MLB API request is worth retrying.
+
+    4xx responses other than 429 mean the request was rejected outright — retrying
+    just triples our request volume against a server that already said no. This
+    matters a lot for a hard block like a 406 from an IP-reputation filter, where
+    retrying makes an already-bad situation worse instead of better.
+    """
+
+    def test_5xx_is_retryable(self) -> None:
+        error = aiohttp.ClientResponseError(request_info=None, history=(), status=500)  # type: ignore[arg-type]
+        assert _is_retryable(error) is True
+
+    def test_429_is_retryable(self) -> None:
+        error = aiohttp.ClientResponseError(request_info=None, history=(), status=429)  # type: ignore[arg-type]
+        assert _is_retryable(error) is True
+
+    def test_406_is_not_retryable(self) -> None:
+        error = aiohttp.ClientResponseError(request_info=None, history=(), status=406)  # type: ignore[arg-type]
+        assert _is_retryable(error) is False
+
+    def test_404_is_not_retryable(self) -> None:
+        error = aiohttp.ClientResponseError(request_info=None, history=(), status=404)  # type: ignore[arg-type]
+        assert _is_retryable(error) is False
+
+    def test_timeout_is_retryable(self) -> None:
+        assert _is_retryable(TimeoutError()) is True
+
+    def test_connection_error_is_retryable(self) -> None:
+        assert _is_retryable(aiohttp.ClientConnectionError()) is True
+
+    def test_unrelated_exception_is_not_retryable(self) -> None:
+        assert _is_retryable(ValueError("not an API error")) is False
