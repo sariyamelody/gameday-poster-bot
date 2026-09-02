@@ -213,13 +213,28 @@ class MarinersBot:
             await self.transaction_scheduler.start()
 
             # Perform initial schedule sync
-            await self._sync_schedule()
+            try:
+                await self._sync_schedule()
+            except Exception as e:
+                logger.error("Initial schedule sync failed, continuing startup", error=str(e))
 
             # Send any pre-game notifications missed while the bot was down
-            await self._send_missed_notifications()
+            try:
+                await self._send_missed_notifications()
+            except Exception as e:
+                logger.error("Sending missed notifications failed, continuing startup", error=str(e))
 
-            # Perform initial transaction sync
-            await self._sync_transactions()
+            # Perform initial transaction sync. Both this and _sync_schedule above
+            # re-raise on failure (by design, so the periodic scheduler jobs that
+            # call them log loudly) — but an MLB API hiccup during *this one-off
+            # startup call* must not prevent the whole bot from starting. Without
+            # this try/except, a single failed request here took down Telegram
+            # polling, the notification scheduler, and everything else along with
+            # it, in an endless crash-restart loop.
+            try:
+                await self._sync_transactions()
+            except Exception as e:
+                logger.error("Initial transaction sync failed, continuing startup", error=str(e))
 
             # Start Telegram bot
             await self.telegram_bot.start_polling()
