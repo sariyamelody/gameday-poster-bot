@@ -49,6 +49,27 @@ structlog.configure(
 logger = structlog.get_logger(__name__)
 
 
+def _should_skip_silly_baseball_tick(
+    *,
+    now: datetime,
+    cooldown_until: datetime | None,
+    window_synced: bool,
+    window: tuple[datetime, datetime] | None,
+) -> bool:
+    """Whether a silly-baseball poll tick should skip making any MLB API request.
+
+    Two independent reasons to skip:
+    - A failure cooldown is active (see _check_silly_baseball's circuit breaker).
+    - The window has been synced for today and `now` falls outside it (or there
+      are no games today at all, i.e. `window is None`). If the window hasn't
+      been synced yet, we fail open and poll — see _sync_silly_baseball_window.
+    """
+    if cooldown_until is not None and now < cooldown_until:
+        return True
+
+    return window_synced and (window is None or not (window[0] <= now <= window[1]))
+
+
 class MarinersBot:
     """Main application class for the Mariners notification bot."""
 
@@ -92,6 +113,22 @@ class MarinersBot:
         # actually been true for a while. Position-player-pitching is exempt —
         # it's edge-triggered, so discovering it late is still new information.
         self._silly_baseball_seeded_startup = False
+        # Today's [earliest first pitch - buffer, latest first pitch + buffer] window,
+        # refreshed once daily (see _sync_silly_baseball_window). The poller checks this
+        # before hitting the MLB API each tick, so we're not polling every game day 24/7 —
+        # only during the hours when a game could plausibly be live.
+        # None = unknown (not yet synced, or the last sync failed) — fail open and poll
+        # every tick rather than silently going quiet for the rest of the day.
+        self._silly_baseball_active_window: tuple[datetime, datetime] | None = None
+        # Set once the window has been successfully synced at least once today, so
+        # "no games today" (an empty but *known* window) can be told apart from
+        # "not synced yet" — both leave _silly_baseball_active_window as None.
+        self._silly_baseball_window_synced = False
+        # Poller-level circuit breaker: consecutive failed ticks (e.g. MLB
+        # rejecting every request during an IP block) back off exponentially
+        # instead of retrying every tick forever — see _check_silly_baseball.
+        self._silly_baseball_consecutive_failures = 0
+        self._silly_baseball_cooldown_until: datetime | None = None
         if self.settings.silly_baseball_enabled:
             self.scheduler.set_silly_baseball_callback(self._check_silly_baseball)
 
@@ -221,76 +258,110 @@ class MarinersBot:
             logger.error("Error during shutdown", error=str(e))
 
     async def _sync_schedule(self) -> None:
-        """Sync the Mariners schedule from MLB API."""
+        """Sync the Mariners schedule from MLB API.
+
+        Fetches a bounded rolling window (schedule_sync_lookahead_days, default
+        14) day-by-day rather than the whole remaining season in one range
+        request — MLB's /schedule endpoint now rejects startDate/endDate range
+        queries outright (406), so date=<single day> is the only reliably
+        accepted shape. This sync runs daily, so the window keeps rolling
+        forward and every game gets picked up well before it needs a
+        notification scheduled; nothing needs the full season cached at once.
+        """
         logger.info("Starting schedule sync")
 
         try:
             async with MLBClient(self.settings) as mlb_client:
-                current_year = datetime.now().year
-                current_date = datetime.now()
+                start = datetime.now(UTC).date()
+                end = start + timedelta(days=self.settings.schedule_sync_lookahead_days)
 
-                all_games = []
-
-                # Get remaining games from current season (including postseason)
-                current_season_games = await mlb_client.get_team_schedule(
-                    start_date=current_date,
-                    end_date=datetime(current_year, 12, 31),
-                    season=current_year
-                )
-                all_games.extend(current_season_games)
-                logger.info("Fetched current season games",
-                           season=current_year,
-                           count=len(current_season_games))
-
-                # If we're in the off-season (after September), also get next season's games
-                if current_date.month >= 10:  # October or later
-                    next_year = current_year + 1
-                    next_season_games = await mlb_client.get_team_schedule(
-                        start_date=datetime(next_year, 1, 1),
-                        end_date=datetime(next_year, 12, 31),
-                        season=next_year
-                    )
-                    all_games.extend(next_season_games)
-                    logger.info("Fetched next season games",
-                               season=next_year,
-                               count=len(next_season_games))
+                all_games = await mlb_client.get_team_schedule_by_day(start, end)
+                logger.info("Fetched upcoming schedule window",
+                           start_date=start.isoformat(),
+                           end_date=end.isoformat(),
+                           count=len(all_games))
 
             if not all_games:
                 logger.warning("No games found in schedule sync")
-                return
+            else:
+                # Save games to database
+                saved_count = 0
+                async with self.db_session.get_session() as session:
+                    repository = Repository(session)
 
-            # Save games to database
-            saved_count = 0
-            async with self.db_session.get_session() as session:
-                repository = Repository(session)
+                    for game in all_games:
+                        if game.is_mariners_game:
+                            await repository.save_game(game)
+                            saved_count += 1
 
-                for game in all_games:
-                    if game.is_mariners_game:
-                        await repository.save_game(game)
-                        saved_count += 1
+                logger.info("Saved games to database", count=saved_count)
 
-            logger.info("Saved games to database", count=saved_count)
+                # Schedule notifications for upcoming games
+                upcoming_games = await self._get_upcoming_games()
+                scheduled_count = await self.scheduler.schedule_game_notifications(upcoming_games)
 
-            # Schedule notifications for upcoming games
-            upcoming_games = await self._get_upcoming_games()
-            scheduled_count = await self.scheduler.schedule_game_notifications(upcoming_games)
-
-            logger.info(
-                "Schedule sync completed",
-                total_games=len(all_games),
-                saved_games=saved_count,
-                scheduled_notifications=scheduled_count
-            )
+                logger.info(
+                    "Schedule sync completed",
+                    total_games=len(all_games),
+                    saved_games=saved_count,
+                    scheduled_notifications=scheduled_count
+                )
 
         except Exception as e:
             logger.error("Failed to sync schedule", error=str(e))
             raise
 
-        # Refresh the silly-baseball position cache alongside the daily schedule
-        # sync (same 6am PT + startup cadence) — a failure here shouldn't fail
-        # schedule sync, so it's handled separately.
-        if self.settings.silly_baseball_enabled:
-            await self._sync_silly_baseball_positions()
+        finally:
+            # Refresh the silly-baseball position cache and today's active-game window
+            # alongside the daily schedule sync (same 6am PT + startup cadence). This
+            # runs even if the Mariners schedule fetch above failed or found nothing —
+            # a `return`/exception in that unrelated fetch must not silently disable
+            # the silly-baseball poller's daily window refresh.
+            if self.settings.silly_baseball_enabled:
+                await self._sync_silly_baseball_positions()
+                await self._sync_silly_baseball_window()
+
+    async def _sync_silly_baseball_window(self) -> None:
+        """Compute today's [earliest first pitch, latest first pitch] window (PT date).
+
+        Used to gate the silly-baseball poller so it only hits the MLB API during
+        hours when a game could plausibly be live, instead of every day 24/7 —
+        this is what actually caps our daily request volume, not the tick interval.
+        A day with no games sets the window to None, which suppresses polling
+        entirely until the next daily refresh (or a restart).
+        """
+        try:
+            pt_date = datetime.now(pytz.timezone(self.settings.scheduler_timezone)).date()
+            async with MLBClient(self.settings) as mlb_client:
+                games = await mlb_client.get_league_scoreboard(pt_date)
+
+            start_times = [g.game_date for g in games if g.game_date is not None]
+            self._silly_baseball_window_synced = True
+            if not start_times:
+                self._silly_baseball_active_window = None
+                logger.info("No games scheduled today, silly baseball poller idle")
+                return
+
+            # Games rarely run past ~5 hours; pad both ends generously for delays/extras.
+            window_start = min(start_times) - timedelta(minutes=30)
+            window_end = max(start_times) + timedelta(hours=6)
+            self._silly_baseball_active_window = (window_start, window_end)
+            logger.info(
+                "Refreshed silly baseball active window",
+                window_start=window_start.isoformat(),
+                window_end=window_end.isoformat(),
+                games_today=len(start_times),
+            )
+
+        except Exception as e:
+            # Fail closed: treat a failed sync the same as "no games today" and
+            # suppress polling until the next daily sync (or restart). A failure
+            # here is often the exact MLB-side rejection the window exists to
+            # protect against, so "go quiet" is the correct response, not "poll
+            # harder" — the opposite of a naive fail-open default.
+            logger.warning("Failed to refresh silly baseball active window", error=str(e))
+            self._silly_baseball_window_synced = True
+            self._silly_baseball_active_window = None
 
     async def _sync_silly_baseball_positions(self) -> None:
         """Bulk-refresh the pitcher-id -> primary-position cache for silly-baseball detection."""
@@ -440,12 +511,35 @@ class MarinersBot:
         no per-game live-feed polling. Query date is Pacific Time, not UTC:
         computing it in UTC would roll a still-in-progress PT evening game to
         "tomorrow" and the poll would silently find zero live games for hours.
+
+        Skips the request entirely outside today's active-game window (see
+        _sync_silly_baseball_window) — no MLB call at all on off days or in the
+        middle of the night, which is what actually caps our request volume.
+
+        Also backs off on repeated failures (e.g. MLB rejecting every request
+        during an IP block): each consecutive failed tick doubles a cooldown,
+        capped at 30 minutes, during which ticks are skipped without a request.
+        MLB's 406s here carry no Retry-After or other backoff signal, so this
+        cooldown is entirely self-imposed rather than following a server hint.
         """
+        now = datetime.now(UTC)
+
+        if _should_skip_silly_baseball_tick(
+            now=now,
+            cooldown_until=self._silly_baseball_cooldown_until,
+            window_synced=self._silly_baseball_window_synced,
+            window=self._silly_baseball_active_window,
+        ):
+            return
+
         try:
             pt_date = datetime.now(pytz.timezone(self.settings.scheduler_timezone)).date()
 
             async with MLBClient(self.settings) as mlb_client:
                 games = await mlb_client.get_league_scoreboard(pt_date)
+
+                self._silly_baseball_consecutive_failures = 0
+                self._silly_baseball_cooldown_until = None
 
                 live_games = [g for g in games if g.is_live]
                 if not live_games:
@@ -488,7 +582,15 @@ class MarinersBot:
                 logger.info("Sent silly baseball alerts", count=sent_count)
 
         except Exception as e:
-            logger.error("Failed to check silly baseball conditions", error=str(e))
+            self._silly_baseball_consecutive_failures += 1
+            cooldown_seconds = min(60 * 2 ** (self._silly_baseball_consecutive_failures - 1), 1800)
+            self._silly_baseball_cooldown_until = now + timedelta(seconds=cooldown_seconds)
+            logger.error(
+                "Failed to check silly baseball conditions",
+                error=str(e),
+                consecutive_failures=self._silly_baseball_consecutive_failures,
+                cooldown_seconds=cooldown_seconds,
+            )
 
     async def _send_silly_baseball_alert(self, message: str) -> None:
         """Send a silly-baseball alert to the broadcast channel and opted-in DM subscribers."""
@@ -1220,12 +1322,16 @@ def cli() -> None:
               default='none', help="OpenTelemetry trace exporter to use")
 def start(debug: bool, traces_stdout: bool, trace_exporter: str) -> None:
     """Start the Mariners notification bot."""
+    import logging
     import os
 
-    # Configure logging level
-    if debug:
-        import logging
-        logging.basicConfig(level=logging.DEBUG)
+    # Configure logging level. structlog's filter_by_level processor (wired up
+    # at module load, above) checks the *stdlib* logger's effective level, so
+    # without a basicConfig call here the root logger stays at its default
+    # (WARNING) and every logger.info(...)/.debug(...) call is silently
+    # dropped in production regardless of the LOG_LEVEL setting.
+    level_name = "DEBUG" if debug else get_settings().log_level.upper()
+    logging.basicConfig(level=getattr(logging, level_name, logging.INFO))
 
     # Override OTEL settings if CLI options provided
     if traces_stdout:
@@ -1258,16 +1364,12 @@ def sync_schedule(days: int) -> None:
 
         try:
             async with MLBClient(settings) as mlb_client:
-                end_date = datetime.now() + timedelta(days=days)
-                games = await mlb_client.get_team_schedule(
-                    start_date=datetime.now(),
-                    end_date=end_date
-                )
+                start_date = datetime.now(UTC).date()
+                end_date = start_date + timedelta(days=days)
+                games = await mlb_client.get_team_schedule_by_day(start_date, end_date)
 
-            mariners_games = [g for g in games if g.is_mariners_game]
-
-            click.echo(f"Found {len(mariners_games)} Mariners games in the next {days} days:")
-            for game in mariners_games:
+            click.echo(f"Found {len(games)} Mariners games in the next {days} days:")
+            for game in games:
                 click.echo(f"  {game}")
 
         except Exception as e:

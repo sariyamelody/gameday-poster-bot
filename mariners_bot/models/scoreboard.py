@@ -4,6 +4,8 @@ Parsed from a single `GET /api/v1/schedule?hydrate=linescore` call that covers e
 MLB game on a given day — no per-game live-feed polling involved.
 """
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from ..utils import format_ordinal
@@ -36,6 +38,7 @@ class LiveScoreboardGame(BaseModel):
     game_pk: int
     game_type: str
     is_live: bool
+    game_date: datetime | None = None  # scheduled first pitch (UTC); used to gate polling
     home_team: str
     away_team: str
     home_score: int
